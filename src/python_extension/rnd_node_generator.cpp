@@ -9,6 +9,7 @@ namespace python_extension {
 
         this->_rng_gen = XoshiroCpp::Xoshiro256Plus(42);
         this->_dis_step = std::uniform_int_distribution<uint64_t>(0, this->_path_index.get_np_bv().size() - 1);
+        this->_flip = std::uniform_int_distribution<uint64_t>(0, 1);
     }
 
     RndNodeGenerator::~RndNodeGenerator() {
@@ -45,19 +46,52 @@ namespace python_extension {
         as_integers(step_b)[0] = path_idx;
         as_integers(step_b)[1] = s_rank1;
 
+
         handlegraph::handle_t term_i = this->_path_index.get_handle_of_step(step_a);
+        uint64_t term_i_length = this->_graph.get_length(term_i);
+        uint64_t pos_in_path_a = this->_path_index.get_position_of_step(step_a);
+
+        bool term_i_is_rev = this->_graph.get_is_reverse(term_i);
+        bool use_other_end_a = this->_flip(this->_rng_gen); // 1 == +; 0 == -
+        if (use_other_end_a) {
+            pos_in_path_a += term_i_length;
+            // flip back if we were already reversed
+            use_other_end_a = !term_i_is_rev;
+        } else {
+            use_other_end_a = term_i_is_rev;
+        }
         uint64_t id_n0 = this->_graph.get_id(term_i);
 
+
         handlegraph::handle_t term_j = this->_path_index.get_handle_of_step(step_b);
+        uint64_t term_j_length = this->_graph.get_length(term_j);
+        uint64_t pos_in_path_b = this->_path_index.get_position_of_step(step_b);
+
+        bool term_j_is_rev = this->_graph.get_is_reverse(term_j);
+        bool use_other_end_b = this->_flip(this->_rng_gen); // 1 == +; 0 == -
+        if (use_other_end_b) {
+            pos_in_path_b += term_j_length;
+            // flip back if we were already reversed
+            use_other_end_b = !term_j_is_rev;
+        } else {
+            use_other_end_b = term_j_is_rev;
+        }
+
         uint64_t id_n1 = this->_graph.get_id(term_j);
 
-        uint64_t p_dis = s_rank1 - s_rank0;
+
+        double distance = std::abs(static_cast<double>(pos_in_path_b) - static_cast<double>(pos_in_path_a));
+        if (distance == 0.0) {
+            distance = 1e-9;
+        }
 
 
         random_nodes_pack_t pack;
         pack.id_n0 = id_n0;
         pack.id_n1 = id_n1;
-        pack.p_dis = p_dis;
+        pack.vis_p_n0 = use_other_end_a? 1 : 0;
+        pack.vis_p_n1 = use_other_end_b? 1 : 0;
+        pack.distance = distance;
         return pack;
     }
 

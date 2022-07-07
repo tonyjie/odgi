@@ -340,11 +340,21 @@ PYBIND11_MODULE(odgi, m)
                 return p.id_n1;
              },
              "Get id of node1 from random_nodes_pack.")
-        .def("get_path_distance",
+        .def("get_vis_p_n0",
              [](const python_extension::random_nodes_pack_t p) {
-                return p.p_dis;
+                return p.vis_p_n0;
              },
-             "Get path distance of random nodes in random_nodes_pack.")
+             "Get chosen visualization point for node n0 (0 or 1).")
+        .def("get_vis_p_n1",
+             [](const python_extension::random_nodes_pack_t p) {
+                return p.vis_p_n1;
+             },
+             "Get chosen visualization point for node n1 (0 or 1).")
+        .def("get_distance",
+             [](const python_extension::random_nodes_pack_t p) {
+                return p.distance;
+             },
+             "Get distance between random nodes in random_nodes_pack.")
         // Definition of class_<python_extension::random_nodes_pack_t> ends here.
     ;
 
