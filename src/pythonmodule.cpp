@@ -2,6 +2,7 @@
 #include "odgi.hpp"
 
 #include "python_extension/rnd_node_generator.h"
+#include "python_extension/generate_layout_file.hpp"
 
 // Pybind11
 #include <pybind11/pybind11.h>
@@ -357,5 +358,9 @@ PYBIND11_MODULE(odgi, m)
              "Get distance between random nodes in random_nodes_pack.")
         // Definition of class_<python_extension::random_nodes_pack_t> ends here.
     ;
+
+    m.def("generate_layout_file",
+          &python_extension::generate_layout_file,
+          "Generate odgi layout file from numpy coordinates.");
 
 }
