@@ -170,6 +170,11 @@ const size_t odgi_get_step_count(const ograph_t graph, const handle_i ihandle)
   return ((as_graph_t(graph)))->get_step_count(as_handle(ihandle));
 }
 
+// number of steps in path
+const size_t odgi_get_step_in_path_count(const ograph_t graph, const path_handle_i path) {
+    return graph->get_step_count(as_path_handle_t(path));
+}
+
 // has python doctest
 const handle_i odgi_get_handle_of_step(const ograph_t graph, step_handle_i step)
 {
@@ -307,6 +312,35 @@ const bool odgi_for_each_step_on_handle(const ograph_t graph,
                                           next(as_step_handle_i(step));
                                           return true; });
 }
+
+
+oRndNodeGenerator odgi_create_rnd_node_generator(ograph_t graph){
+  auto RNoG = oRndNodeGenerator(new python_extension::RndNodeGenerator(*as_graph_t(graph)));
+  return RNoG;
+}
+const python_extension::random_nodes_pack_t odgi_get_random_node_pack(oRndNodeGenerator RNoG){
+  return RNoG->get_random_node_pack();
+}
+const uint64_t odgi_RNP_get_id_n0(python_extension::random_nodes_pack_t p) {
+    return p.id_n0;
+}
+const uint64_t odgi_RNP_get_id_n1(python_extension::random_nodes_pack_t p) {
+    return p.id_n1;
+}
+const uint32_t odgi_RNP_get_vis_p_n0(python_extension::random_nodes_pack_t p) {
+    return p.vis_p_n0;
+}
+const uint32_t odgi_RNP_get_vis_p_n1(python_extension::random_nodes_pack_t p) {
+    return p.vis_p_n1;
+}
+const float odgi_RNP_get_distance(python_extension::random_nodes_pack_t p) {
+    return p.distance;
+}
+
+const void odgi_generate_layout_file(const ograph_t graph, std::vector<double> x_coords, std::vector<double> y_coords, string layout_file_name) {
+    python_extension::generate_layout_file(*graph, x_coords, y_coords, layout_file_name);
+}
+
 
 // has python doctest
 const std::string odgi_get_path_name(const ograph_t graph, const path_handle_i ipath) {

@@ -9,6 +9,8 @@
 #include <cstddef>
 
 #include "odgi.hpp"
+#include "python_extension/rnd_node_generator.h"
+#include "python_extension/generate_layout_file.h"
 
 using namespace odgi;
 
@@ -40,6 +42,7 @@ inline step_handle_t as_step_handle_t(step_handle_i step) {
   return step;
 }
 
+typedef std::shared_ptr<python_extension::RndNodeGenerator> oRndNodeGenerator;
 
 const std::string odgi_version();
 size_t odgi_long_long_size();
@@ -75,6 +78,7 @@ const bool odgi_path_is_empty(const ograph_t graph, const path_handle_i path);
 const path_handle_i odgi_get_path_handle(const ograph_t graph, const char *path_name);
 // Steps
 const size_t odgi_get_step_count(const ograph_t graph, const handle_i ihandle);
+const size_t odgi_get_step_in_path_count(const ograph_t graph, const path_handle_i path);
 const handle_i odgi_get_handle_of_step(const ograph_t graph, step_handle_i step);
 const path_handle_i odgi_get_path(const ograph_t graph, step_handle_i step);
 const step_handle_i odgi_path_begin(const ograph_t graph, path_handle_i path);
@@ -108,6 +112,16 @@ void odgi_for_each_step_in_path(const ograph_t graph,
 const bool odgi_for_each_step_on_handle(const ograph_t graph,
                                         const handle_i ihandle,
                                         bool (*next) (const step_handle_i step));
+
+oRndNodeGenerator odgi_create_rnd_node_generator(ograph_t graph);
+const python_extension::random_nodes_pack_t odgi_get_random_node_pack(oRndNodeGenerator RNoG);
+const uint64_t odgi_RNP_get_id_n0(python_extension::random_nodes_pack_t p);
+const uint64_t odgi_RNP_get_id_n1(python_extension::random_nodes_pack_t p);
+const uint32_t odgi_RNP_get_vis_p_n0(python_extension::random_nodes_pack_t p);
+const uint32_t odgi_RNP_get_vis_p_n1(python_extension::random_nodes_pack_t p);
+const float odgi_RNP_get_distance(python_extension::random_nodes_pack_t p);
+
+const void odgi_generate_layout_file(const ograph_t graph, std::vector<double> x_coords, std::vector<double> y_coords, string layout_file_name);
 
 const std::string odgi_get_path_name(const ograph_t graph, const path_handle_i ipath);
 

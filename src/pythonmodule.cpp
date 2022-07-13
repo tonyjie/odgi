@@ -1,9 +1,6 @@
 // odgi
 #include "odgi.hpp"
 
-#include "python_extension/rnd_node_generator.h"
-#include "python_extension/generate_layout_file.hpp"
-
 // Pybind11
 #include <pybind11/pybind11.h>
 #include <pybind11/functional.h>
@@ -321,46 +318,5 @@ PYBIND11_MODULE(odgi, m)
              "Load the graph from the given file.")
         // Definition of class_<odgi::graph_t> ends here.
     ;
-
-    py::class_<python_extension::RndNodeGenerator>(m, "RndNodeGenerator", "Generator of random nodes packages")
-        .def(py::init<odgi::graph_t &>())
-        .def("get_random_nodes_pack",
-             &python_extension::RndNodeGenerator::get_random_node_pack,
-             "Return two random nodes and their path distance as random_nodes_pack.")
-        // Definition of class_<python_extension::RndNodeGenerator> ends here.
-    ;
-
-    py::class_<python_extension::random_nodes_pack_t>(m, "random_nodes_pack", "package of two random nodes in graph")
-        .def("get_id_n0",
-             [](const python_extension::random_nodes_pack_t p) {
-                return p.id_n0;
-             },
-             "Get id of node0 from random_nodes_pack.")
-        .def("get_id_n1",
-             [](const python_extension::random_nodes_pack_t p) {
-                return p.id_n1;
-             },
-             "Get id of node1 from random_nodes_pack.")
-        .def("get_vis_p_n0",
-             [](const python_extension::random_nodes_pack_t p) {
-                return p.vis_p_n0;
-             },
-             "Get chosen visualization point for node n0 (0 or 1).")
-        .def("get_vis_p_n1",
-             [](const python_extension::random_nodes_pack_t p) {
-                return p.vis_p_n1;
-             },
-             "Get chosen visualization point for node n1 (0 or 1).")
-        .def("get_distance",
-             [](const python_extension::random_nodes_pack_t p) {
-                return p.distance;
-             },
-             "Get distance between random nodes in random_nodes_pack.")
-        // Definition of class_<python_extension::random_nodes_pack_t> ends here.
-    ;
-
-    m.def("generate_layout_file",
-          &python_extension::generate_layout_file,
-          "Generate odgi layout file from numpy coordinates.");
 
 }

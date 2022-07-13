@@ -611,6 +611,7 @@ add_library(odgi_objs OBJECT
   ${CMAKE_SOURCE_DIR}/src/algorithms/tips.cpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_jaccard.cpp
   ${CMAKE_SOURCE_DIR}/src/python_extension/rnd_node_generator.cpp
+  ${CMAKE_SOURCE_DIR}/src/python_extension/generate_layout_file.cpp
   ${lodepng_SOURCES}
   ${handlegraph_sources}
 )
@@ -789,7 +790,7 @@ set(odgi_HEADERS
   ${CMAKE_SOURCE_DIR}/src/algorithms/tips_bed_writer_thread.hpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_jaccard.hpp
   ${CMAKE_SOURCE_DIR}/src/python_extension/rnd_node_generator.h
-  ${CMAKE_SOURCE_DIR}/src/python_extension/generate_layout_file.hpp
+  ${CMAKE_SOURCE_DIR}/src/python_extension/generate_layout_file.h
 )
 
 target_include_directories(odgi_objs PUBLIC ${odgi_INCLUDES})

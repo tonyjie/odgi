@@ -9,8 +9,13 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/functional.h>
 #include <pybind11/iostream.h>
+#include <pybind11/numpy.h>
+
+#include <vector>
 
 PYBIND11_MAKE_OPAQUE(ograph_t);
+PYBIND11_MAKE_OPAQUE(oRndNodeGenerator);
+PYBIND11_MAKE_OPAQUE(python_extension::random_nodes_pack_t);
 
 namespace py = pybind11;
 
@@ -20,6 +25,8 @@ PYBIND11_MODULE(odgi_ffi, m)
     // py::class_<path_handle_t>(m, "opaque path_handle_t for FFI");
     // py::class_<handle_t>(m, "opaque handle_t for FFI");
     py::class_<step_handle_t>(m, "step_handle_t for FFI");
+    py::class_<oRndNodeGenerator>(m, "rnd node generator");
+    py::class_<python_extension::random_nodes_pack_t>(m, "package of two random nodes in graph") ;
     m.def("odgi_version", &odgi_version, "Get the odgi library build version");
     m.def("odgi_long_long_size", &odgi_long_long_size);
     m.def("odgi_handle_i_size", &odgi_handle_i_size);
@@ -46,6 +53,7 @@ PYBIND11_MODULE(odgi_ffi, m)
     m.def("odgi_path_is_empty", &odgi_path_is_empty);
     m.def("odgi_get_path_handle", &odgi_get_path_handle);
     m.def("odgi_get_step_count", &odgi_get_step_count);
+    m.def("odgi_get_step_in_path_count", &odgi_get_step_in_path_count);
     m.def("odgi_get_handle_of_step", &odgi_get_handle_of_step);
     m.def("odgi_get_path", &odgi_get_path);
     m.def("odgi_path_begin", &odgi_path_begin);
@@ -69,4 +77,29 @@ PYBIND11_MODULE(odgi_ffi, m)
     m.def("odgi_get_path_handle_of_step", &odgi_get_path_handle_of_step);
     m.def("odgi_for_each_step_in_path", &odgi_for_each_step_in_path);
     m.def("odgi_for_each_step_on_handle", &odgi_for_each_step_on_handle);
+    m.def("odgi_create_rnd_node_generator", &odgi_create_rnd_node_generator);
+    m.def("odgi_get_random_node_pack", &odgi_get_random_node_pack);
+    m.def("odgi_RNP_get_id_n0", &odgi_RNP_get_id_n0, "Get id of node0 from random_nodes_pack.");
+    m.def("odgi_RNP_get_id_n1", &odgi_RNP_get_id_n1, "Get id of node1 from random_nodes_pack.");
+    m.def("odgi_RNP_get_vis_p_n0", &odgi_RNP_get_vis_p_n0, "Get chosen visualization point for node n0 (0 or 1).");
+    m.def("odgi_RNP_get_vis_p_n1", &odgi_RNP_get_vis_p_n1, "Get chosen visualization point for node n1 (0 or 1).");
+    m.def("odgi_RNP_get_distance", &odgi_RNP_get_distance, "Get distance between random nodes in random_nodes_pack.");
+    m.def("odgi_generate_layout_file",
+          [](const ograph_t graph, py::array_t<double> coords_np, string layout_file_name) {
+              // similar to layout_main.cpp
+              // numpy array converted here to keep pybind11 dependencies to this file
+              int size = coords_np.shape(0) * coords_np.shape(1);
+              std::vector<double> x_final(size);
+              std::vector<double> y_final(size);
+
+              // transfer coordinates from numpy to std::vector
+              auto coords = coords_np.unchecked<3>();
+              for (int e = 0; e < coords.shape(0); e++) {
+                  x_final[2*e] = coords(e, 0, 0);
+                  x_final[2*e+1] = coords(e, 1, 0);
+                  y_final[2*e] = coords(e, 0, 1);
+                  y_final[2*e+1] = coords(e, 1, 1);
+              }
+              odgi_generate_layout_file(graph, x_final, y_final, layout_file_name);
+          });
 }

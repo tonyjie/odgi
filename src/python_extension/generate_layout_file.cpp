@@ -1,31 +1,11 @@
-#include <iostream>
-#include <vector>
+#include "generate_layout_file.h"
 
-#include "odgi.hpp"
-#include <pybind11/numpy.h>
-#include "algorithms/layout.hpp"
-#include "algorithms/draw.hpp"
-#include "weakly_connected_components.hpp"
-
-namespace py = pybind11;
 
 namespace python_extension {
 
-    void generate_layout_file(py::array_t<double> coords_np, string layout_file_name, odgi::graph_t &graph) {
+    void generate_layout_file(odgi::graph_t &graph, std::vector<double> x_final, std::vector<double> y_final, string layout_file_name) {
         // similar to layout_main.cpp
-        int size = coords_np.shape(0) * coords_np.shape(1);
-        std::vector<double> x_final(size);
-        std::vector<double> y_final(size);
-
-        // transfer coordinates from numpy to std::vector
-        auto coords = coords_np.unchecked<3>();
-        for (int e = 0; e < coords.shape(0); e++) {
-            x_final[2*e] = coords(e, 0, 0);
-            x_final[2*e+1] = coords(e, 1, 0);
-            y_final[2*e] = coords(e, 0, 1);
-            y_final[2*e+1] = coords(e, 1, 1);
-        }
-
+        // single numpy array already converted to x_final and y_final in pythonffi.cpp
         // put border around it? same code as in layout_main.cpp
         std::vector<std::vector<handlegraph::handle_t>> weak_components = odgi::algorithms::weakly_connected_component_vectors(&graph);
 
@@ -66,5 +46,4 @@ namespace python_extension {
         lay.serialize(f);
         f.close();
     }
-
 }
