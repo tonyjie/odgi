@@ -102,4 +102,31 @@ PYBIND11_MODULE(odgi_ffi, m)
               }
               odgi_generate_layout_file(graph, x_final, y_final, layout_file_name);
           });
+    m.def("odgi_get_random_node_numpy_batch",
+          [](oRndNodeGenerator RNoG, int batch_size) {
+              int64_t i[batch_size];
+              int64_t j[batch_size];
+              int64_t vis_i[batch_size];
+              int64_t vis_j[batch_size];
+              double d[batch_size];
+
+              for (int idx = 0; idx < batch_size; idx++) {
+              python_extension::random_nodes_pack_t p = RNoG->get_random_node_pack();
+                  i[idx] = p.id_n0;
+                  j[idx] = p.id_n1;
+                  vis_i[idx] = p.vis_p_n0;
+                  vis_j[idx] = p.vis_p_n1;
+                  d[idx] = p.distance;
+              }
+
+              py::array_t<int64_t> i_np = py::array_t<int64_t>(batch_size, i);
+              py::array_t<int64_t> j_np = py::array_t<int64_t>(batch_size, j);
+              py::array_t<int64_t> vis_i_np = py::array_t<int64_t>(batch_size, vis_i);
+              py::array_t<int64_t> vis_j_np = py::array_t<int64_t>(batch_size, vis_j);
+              py::array_t<double> d_np = py::array_t<double>(batch_size, d);
+
+              py::tuple ret_tuple = py::make_tuple(i_np, j_np, vis_i_np, vis_j_np, d_np);
+              return ret_tuple;
+          },
+          py::return_value_policy::move);
 }
