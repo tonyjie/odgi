@@ -2,7 +2,7 @@
 
 namespace python_extension {
 
-    RndNodeGenerator::RndNodeGenerator(odgi::graph_t &graph) : _graph{graph} {
+    RndNodeGenerator::RndNodeGenerator(odgi::graph_t &graph, double zipf_theta, uint64_t space_max, uint64_t space_quantization_step) : _graph{graph} {
         this->_path_index.from_handle_graph(this->_graph, 1);
         this->_nr_iv = &(this->_path_index.get_nr_iv());
         this->_npi_iv = &(this->_path_index.get_npi_iv());
@@ -10,26 +10,83 @@ namespace python_extension {
         this->_rng_gen = XoshiroCpp::Xoshiro256Plus(42);
         this->_dis_step = std::uniform_int_distribution<uint64_t>(0, this->_path_index.get_np_bv().size() - 1);
         this->_flip = std::uniform_int_distribution<uint64_t>(0, 1);
+
+
+        this->_theta = zipf_theta;
+        uint64_t max_path_step_count = 0;
+        this->_graph.for_each_path_handle(
+                [&] (const handlegraph::path_handle_t &path) {
+                    max_path_step_count = std::max(max_path_step_count, this->_path_index.get_path_step_count(path));
+                });
+        this->_space = max_path_step_count;
+        this->_space_max = space_max;
+        this->_space_quantization_step = space_quantization_step;
+
+        // implemented as in path_sgd_layout.cpp
+        this->_zetas = std::vector<double>((this->_space <= this->_space_max ? this->_space : this->_space_max + (this->_space - this->_space_max) / this->_space_quantization_step + 1)+1);
+        uint64_t last_quantized_i = 0;
+        for (uint64_t i = 1; i < this->_space+1; ++i) {
+            uint64_t quantized_i = i;
+            uint64_t compressed_space = i;
+            if (i > this->_space_max){
+                quantized_i = this->_space_max + (i - this->_space_max) / this->_space_quantization_step + 1;
+                compressed_space = this->_space_max + ((i - this->_space_max) / this->_space_quantization_step) * this->_space_quantization_step;
+            }
+
+            if (quantized_i != last_quantized_i){
+                dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, compressed_space, this->_theta);
+                this->_zetas[quantized_i] = z_p.zeta();
+                last_quantized_i = quantized_i;
+            }
+        }
     }
+
 
     RndNodeGenerator::~RndNodeGenerator() {
     }
 
-    random_nodes_pack_t RndNodeGenerator::get_random_node_pack(void) {
+    random_nodes_pack_t RndNodeGenerator::get_random_node_pack(bool cooling) {
         // generate random nodes similar to worker thread in path_sgd_layout.cpp
         uint64_t step_idx = this->_dis_step(this->_rng_gen);
 
         uint64_t path_idx = (*this->_npi_iv)[step_idx];
         handlegraph::path_handle_t path = handlegraph::as_path_handle(path_idx);
+        uint64_t path_step_count = this->_path_index.get_path_step_count(path);
 
         uint64_t s_rank0 = (*this->_nr_iv)[step_idx] - 1;
         uint64_t s_rank1 = 0;
 
-        std::uniform_int_distribution<uint64_t> rando(0, this->_graph.get_step_count(path)-1);
-        // repeat until s_rank0 & s_rank1 different nodes (in same path)
-        do {
-            s_rank1 = rando(this->_rng_gen);
-        } while (s_rank0 == s_rank1);
+        if (cooling || this->_flip(this->_rng_gen)) {
+            if (s_rank0 > 0 && this->_flip(this->_rng_gen) || s_rank0 == path_step_count-1) {
+                // go backward
+                uint64_t jump_space = std::min(this->_space, s_rank0);
+                uint64_t space = jump_space;
+                if (jump_space > this->_space_max){
+                    space = this->_space_max + (jump_space - this->_space_max) / this->_space_quantization_step + 1;
+                }
+                dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, jump_space, this->_theta, this->_zetas[space]);
+                dirtyzipf::dirty_zipfian_int_distribution<uint64_t> z(z_p);
+                uint64_t z_i = z(this->_rng_gen);
+                s_rank1 = s_rank0 - z_i;
+            } else {
+                // go forward
+                uint64_t jump_space = std::min(this->_space, path_step_count - s_rank0 - 1);
+                uint64_t space = jump_space;
+                if (jump_space > this->_space_max){
+                    space = this->_space_max + (jump_space - this->_space_max) / this->_space_quantization_step + 1;
+                }
+                dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, jump_space, this->_theta, this->_zetas[space]);
+                dirtyzipf::dirty_zipfian_int_distribution<uint64_t> z(z_p);
+                uint64_t z_i = z(this->_rng_gen);
+                s_rank1 = s_rank0 + z_i;
+            }
+        } else {
+            std::uniform_int_distribution<uint64_t> rando(0, this->_graph.get_step_count(path)-1);
+            // repeat until s_rank0 & s_rank1 different nodes (in same path)
+            do {
+                s_rank1 = rando(this->_rng_gen);
+            } while (s_rank0 == s_rank1);
+        }
 
         // sort: s_rank0 < s_rank1
         if (s_rank0 > s_rank1) {

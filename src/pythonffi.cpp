@@ -103,7 +103,7 @@ PYBIND11_MODULE(odgi_ffi, m)
               odgi_generate_layout_file(graph, x_final, y_final, layout_file_name);
           });
     m.def("odgi_get_random_node_numpy_batch",
-          [](oRndNodeGenerator RNoG, int batch_size) {
+          [](oRndNodeGenerator RNoG, int batch_size, bool cooling) {
               int64_t i[batch_size];
               int64_t j[batch_size];
               int64_t vis_i[batch_size];
@@ -111,7 +111,7 @@ PYBIND11_MODULE(odgi_ffi, m)
               double d[batch_size];
 
               for (int idx = 0; idx < batch_size; idx++) {
-              python_extension::random_nodes_pack_t p = RNoG->get_random_node_pack();
+                  python_extension::random_nodes_pack_t p = RNoG->get_random_node_pack(cooling);
                   i[idx] = p.id_n0;
                   j[idx] = p.id_n1;
                   vis_i[idx] = p.vis_p_n0;

@@ -314,12 +314,14 @@ const bool odgi_for_each_step_on_handle(const ograph_t graph,
 }
 
 
-oRndNodeGenerator odgi_create_rnd_node_generator(ograph_t graph){
-  auto RNoG = oRndNodeGenerator(new python_extension::RndNodeGenerator(*as_graph_t(graph)));
+oRndNodeGenerator odgi_create_rnd_node_generator(ograph_t graph) {
+  // TODO: Configure zipf_theta, space_max, space_quantization_step from python
+  auto RNoG = oRndNodeGenerator(new python_extension::RndNodeGenerator(*as_graph_t(graph), 0.99, 1000, 100));
   return RNoG;
 }
 const python_extension::random_nodes_pack_t odgi_get_random_node_pack(oRndNodeGenerator RNoG){
-  return RNoG->get_random_node_pack();
+  // TODO: Implement cooling
+  return RNoG->get_random_node_pack(false);
 }
 const uint64_t odgi_RNP_get_id_n0(python_extension::random_nodes_pack_t p) {
     return p.id_n0;

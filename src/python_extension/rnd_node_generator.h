@@ -3,6 +3,7 @@
 #include "odgi.hpp"
 #include "xp.hpp"
 #include "XoshiroCpp.hpp"
+#include "dirty_zipfian_int_distribution.h"
 
 namespace python_extension {
 
@@ -16,16 +17,22 @@ namespace python_extension {
 
     class RndNodeGenerator {
         public:
-        RndNodeGenerator(odgi::graph_t &graph);
+        RndNodeGenerator(odgi::graph_t &graph, double zipf_theta, uint64_t space_max, uint64_t space_quantization_step);
         ~RndNodeGenerator();
 
-        random_nodes_pack_t get_random_node_pack(void);
+        random_nodes_pack_t get_random_node_pack(bool cooling);
 
         private:
         odgi::graph_t &_graph;
         xp::XP _path_index;
         const sdsl::int_vector<> *_nr_iv;
         const sdsl::int_vector<> *_npi_iv;
+
+        double _theta;
+        uint64_t _space;
+        uint64_t _space_max;
+        uint64_t _space_quantization_step;
+        std::vector<double> _zetas;
 
         XoshiroCpp::Xoshiro256Plus _rng_gen;
         std::uniform_int_distribution<uint64_t> _dis_step;
