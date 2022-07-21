@@ -114,6 +114,7 @@ const bool odgi_for_each_step_on_handle(const ograph_t graph,
                                         bool (*next) (const step_handle_i step));
 
 oRndNodeGenerator odgi_create_rnd_node_generator(ograph_t graph, double zipf_theta, uint64_t space_max, uint64_t space_quantization_step);
+const uint64_t odgi_RNG_get_max_path_length(oRndNodeGenerator RNoG);
 const python_extension::random_nodes_pack_t odgi_get_random_node_pack(oRndNodeGenerator RNoG);
 const uint64_t odgi_RNP_get_id_n0(python_extension::random_nodes_pack_t p);
 const uint64_t odgi_RNP_get_id_n1(python_extension::random_nodes_pack_t p);

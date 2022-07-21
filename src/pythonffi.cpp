@@ -78,6 +78,7 @@ PYBIND11_MODULE(odgi_ffi, m)
     m.def("odgi_for_each_step_in_path", &odgi_for_each_step_in_path);
     m.def("odgi_for_each_step_on_handle", &odgi_for_each_step_on_handle);
     m.def("odgi_create_rnd_node_generator", &odgi_create_rnd_node_generator);
+    m.def("odgi_RNG_get_max_path_length", &odgi_RNG_get_max_path_length);
     m.def("odgi_get_random_node_pack", &odgi_get_random_node_pack);
     m.def("odgi_RNP_get_id_n0", &odgi_RNP_get_id_n0, "Get id of node0 from random_nodes_pack.");
     m.def("odgi_RNP_get_id_n1", &odgi_RNP_get_id_n1, "Get id of node1 from random_nodes_pack.");

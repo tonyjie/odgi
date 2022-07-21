@@ -21,6 +21,7 @@ namespace python_extension {
         ~RndNodeGenerator();
 
         random_nodes_pack_t get_random_node_pack(bool cooling);
+        uint64_t get_max_path_length(void);
 
         private:
         odgi::graph_t &_graph;

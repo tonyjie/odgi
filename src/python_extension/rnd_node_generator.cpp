@@ -152,4 +152,7 @@ namespace python_extension {
         return pack;
     }
 
+    uint64_t RndNodeGenerator::get_max_path_length(void) {
+        return this->_space;
+    }
 }
