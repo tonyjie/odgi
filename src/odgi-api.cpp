@@ -314,9 +314,9 @@ const bool odgi_for_each_step_on_handle(const ograph_t graph,
 }
 
 
-oRndNodeGenerator odgi_create_rnd_node_generator(ograph_t graph) {
+oRndNodeGenerator odgi_create_rnd_node_generator(ograph_t graph, double zipf_theta, uint64_t space_max, uint64_t space_quantization_step) {
   // TODO: Configure zipf_theta, space_max, space_quantization_step from python
-  auto RNoG = oRndNodeGenerator(new python_extension::RndNodeGenerator(*as_graph_t(graph), 0.99, 1000, 100));
+  auto RNoG = oRndNodeGenerator(new python_extension::RndNodeGenerator(*as_graph_t(graph), zipf_theta, space_max, space_quantization_step));
   return RNoG;
 }
 const python_extension::random_nodes_pack_t odgi_get_random_node_pack(oRndNodeGenerator RNoG){
