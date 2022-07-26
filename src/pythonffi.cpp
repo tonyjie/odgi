@@ -105,11 +105,11 @@ PYBIND11_MODULE(odgi_ffi, m)
           });
     m.def("odgi_get_random_node_numpy_batch",
           [](oRndNodeGenerator RNoG, int batch_size, bool cooling) {
-              int64_t i[batch_size];
-              int64_t j[batch_size];
-              int64_t vis_i[batch_size];
-              int64_t vis_j[batch_size];
-              double d[batch_size];
+              int64_t *i = new int64_t[batch_size];
+              int64_t *j = new int64_t[batch_size];
+              int64_t *vis_i = new int64_t[batch_size];
+              int64_t *vis_j = new int64_t[batch_size];
+              double *d = new double[batch_size];
 
               for (int idx = 0; idx < batch_size; idx++) {
                   python_extension::random_nodes_pack_t p = RNoG->get_random_node_pack(cooling);
@@ -127,6 +127,13 @@ PYBIND11_MODULE(odgi_ffi, m)
               py::array_t<double> d_np = py::array_t<double>(batch_size, d);
 
               py::tuple ret_tuple = py::make_tuple(i_np, j_np, vis_i_np, vis_j_np, d_np);
+
+              delete i;
+              delete j;
+              delete vis_i;
+              delete vis_j;
+              delete d;
+
               return ret_tuple;
           },
           py::return_value_policy::move);
