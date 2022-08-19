@@ -168,7 +168,7 @@ int main_stats(int argc, char** argv) {
     }
 
     if (args::get(_summarize) || _multiqc) {
-        uint64_t length_in_bp = 0, node_count = 0, edge_count = 0, path_count = 0;
+        uint64_t length_in_bp = 0, node_count = 0, edge_count = 0, path_count = 0, sum_path_step_count = 0;
         graph.for_each_handle([&](const handle_t& h) {
                 length_in_bp += graph.get_length(h);
                 ++node_count;
@@ -179,6 +179,7 @@ int main_stats(int argc, char** argv) {
             });
         graph.for_each_path_handle([&](const path_handle_t& p) {
                 ++path_count;
+                sum_path_step_count += graph.get_step_count(p);
             });
         if (_multiqc || _yaml) {
         	std::cout << "length: " << length_in_bp << std::endl;
@@ -186,8 +187,8 @@ int main_stats(int argc, char** argv) {
         	std::cout << "edges: " << edge_count << std::endl;
         	std::cout << "paths: " << path_count << std::endl;
         } else {
-			std::cout << "#length\tnodes\tedges\tpaths" << std::endl;
-			std::cout << length_in_bp << "\t" << node_count << "\t" << edge_count << "\t" << path_count << std::endl;
+			std::cout << "#length\tnodes\tedges\tpaths\tsum-path-step-count" << std::endl;
+			std::cout << length_in_bp << "\t" << node_count << "\t" << edge_count << "\t" << path_count << "\t" << sum_path_step_count << std::endl;
 		}
     }
 
