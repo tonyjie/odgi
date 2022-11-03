@@ -621,6 +621,7 @@ add_library(odgi_objs OBJECT
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_keep.cpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/diffpriv.cpp
   ${CMAKE_SOURCE_DIR}/src/cuda/test.cu
+  ${CMAKE_SOURCE_DIR}/src/cuda/layout.cu
   ${lodepng_SOURCES}
   ${handlegraph_sources}
 )
@@ -806,7 +807,8 @@ set(odgi_HEADERS
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_length.hpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_keep.hpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/diffpriv.cpp
-  ${CMAKE_SOURCE_DIR}/src/cuda/test.h)
+  ${CMAKE_SOURCE_DIR}/src/cuda/test.h
+  ${CMAKE_SOURCE_DIR}/src/cuda/layout.h)
 
 target_include_directories(odgi_objs PUBLIC ${odgi_INCLUDES})
 target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 >)

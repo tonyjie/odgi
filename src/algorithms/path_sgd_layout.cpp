@@ -453,7 +453,7 @@ namespace odgi {
                                     std::vector<std::atomic<double>> &X,
                                     std::vector<std::atomic<double>> &Y) {
 
-            cuda_hello_host();
+            cuda::cuda_layout(dynamic_cast<const odgi::graph_t&>(graph), X, Y);
             return;
         }
 
