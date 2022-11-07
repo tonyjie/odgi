@@ -453,7 +453,11 @@ namespace odgi {
                                     std::vector<std::atomic<double>> &X,
                                     std::vector<std::atomic<double>> &Y) {
 
-            cuda::cuda_layout(dynamic_cast<const odgi::graph_t&>(graph), X, Y);
+            cuda::layout_config_t config;
+            config.iter_max = iter_max;
+            config.min_term_updates = min_term_updates;
+
+            cuda::cuda_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y);
             return;
         }
 
