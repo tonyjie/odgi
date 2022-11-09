@@ -463,6 +463,9 @@ namespace odgi {
             cuda::layout_config_t config;
             config.iter_max = iter_max;
             config.min_term_updates = min_term_updates;
+            config.eta_max = eta_max;
+            config.eps = eps;
+            config.iter_with_max_learning_rate = (int32_t)  iter_with_max_learning_rate;
 
             cuda::cuda_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y);
             return;

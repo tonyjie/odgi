@@ -2,8 +2,10 @@
 #include <iostream>
 #include <chrono>
 #include <vector>
+#include "omp.h"
 
 #include "odgi.hpp"
+#include "XoshiroCpp.hpp"
 
 
 #define cuda_layout_profiling
@@ -28,7 +30,7 @@ struct path_element_t {
 };
 
 struct path_t {
-    int32_t step_count;
+    uint32_t step_count;
     path_element_t *elements;
 };
 
@@ -41,6 +43,9 @@ struct path_data_t {
 struct layout_config_t {
     uint64_t iter_max;
     uint64_t min_term_updates;
+    double eta_max;
+    double eps;
+    int32_t iter_with_max_learning_rate;
 };
 
 
