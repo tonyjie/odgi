@@ -16,17 +16,26 @@ __global__ void cuda_device_layout(cuda::layout_config_t config, double *etas, c
 void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
     std::cout << "cuda cpu layout" << std::endl;
     int nbr_threads = 40;
+    std::vector<uint64_t> path_dist;
+    for (int p = 0; p < path_data.path_count; p++) {
+        path_dist.push_back(uint64_t(path_data.paths[p].step_count));
+    }
 
-#pragma omp parallel for num_threads(nbr_threads)
-    for (int tid = 0; tid < nbr_threads; tid++) {
+#pragma omp parallel num_threads(nbr_threads)
+    {
+        int tid = omp_get_thread_num();
 
         XoshiroCpp::Xoshiro256Plus gen(9399220 + tid);
         std::uniform_int_distribution<uint64_t> flip(0, 1);
+        std::discrete_distribution<> rand_path(path_dist.begin(), path_dist.end());
+
+        const int steps_per_thread = config.min_term_updates / nbr_threads;
 
         for (int iter = 0; iter < config.iter_max; iter++ ) {
-            for (int step = 0; step < config.min_term_updates / nbr_threads; step++ ) {
+            // synchronize all threads before each iteration
+#pragma omp barrier
+            for (int step = 0; step < steps_per_thread; step++ ) {
                 // get path
-                std::uniform_int_distribution<uint32_t> rand_path(0, path_data.path_count-1);
                 uint32_t path_idx = rand_path(gen);
                 path_t p = path_data.paths[path_idx];
 

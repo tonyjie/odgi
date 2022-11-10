@@ -2,7 +2,8 @@
 #include <iostream>
 #include <chrono>
 #include <vector>
-#include "omp.h"
+#include <omp.h>
+#include <random>
 
 #include "odgi.hpp"
 #include "XoshiroCpp.hpp"
