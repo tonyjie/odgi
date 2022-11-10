@@ -1,6 +1,8 @@
 #include "path_sgd_layout.hpp"
 #include "algorithms/layout.hpp"
 
+#define debug_array
+
 namespace odgi {
     namespace algorithms {
 
@@ -103,6 +105,17 @@ namespace odgi {
                     }
                 }
 
+#ifdef debug_array
+                std::cerr << "num_iters: " << iter_max + 1 << std::endl;
+                std::cerr << "min_term_updates: " << min_term_updates << std::endl;
+                std::cerr << "etas.size(): " << etas.size() << std::endl;
+                for (size_t i = 0; i < etas.size(); i++) {
+                    // std::cerr << "etas[" << i << "] = " << etas[i] << " ";
+                    std::cerr << etas[i] << ", ";
+                }
+                std::cout << std::endl;
+#endif
+
                 // how many term updates we make
                 std::atomic<uint64_t> term_updates;
                 term_updates.store(0);
@@ -175,9 +188,28 @@ namespace odgi {
                             const std::uint64_t seed = 9399220 + tid;
                             XoshiroCpp::Xoshiro256Plus gen(seed); // a nice, fast PRNG
                             // some references to literal bitvectors in the path index hmmm
-                            const sdsl::bit_vector &np_bv = path_index.get_np_bv();
-                            const sdsl::int_vector<> &nr_iv = path_index.get_nr_iv();
-                            const sdsl::int_vector<> &npi_iv = path_index.get_npi_iv();
+                            const sdsl::bit_vector &np_bv = path_index.get_np_bv(); // seems not used in this function
+                            const sdsl::int_vector<> &nr_iv = path_index.get_nr_iv(); // rank id
+                            const sdsl::int_vector<> &npi_iv = path_index.get_npi_iv(); // path id
+
+#ifdef debug_array
+                            std::cerr << "np_bv.size(): " << np_bv.size() << std::endl;    // 30
+                            for (size_t i = 0; i < np_bv.size(); ++i) {
+                                std::cerr << np_bv[i] << "\t"; // 1 0 0 1 1; 0 1 1 0 1; 0 0 1 0 1; 1 0 0 1 1; 0 1 0 0 1; 1 0 1 0 0
+                            }
+                            std::cerr << std::endl;
+                            std::cerr << "nr_iv.size(): " << nr_iv.size() << std::endl;    // 30
+                            for (size_t i = 0; i < nr_iv.size(); ++i) {
+                                std::cerr << nr_iv[i] << "\t"; // 1 1 1 2 2 2 3 3 3 4 4 4 5 5 5 6 6 6 7 7 7 8 8 8 9 9 9 10 10 10
+                            }
+                            std::cerr << std::endl;
+                            std::cerr << "npi_iv.size(): " << npi_iv.size() << std::endl;  // 30
+                            for (size_t i = 0; i < npi_iv.size(); ++i) {
+                                std::cerr << npi_iv[i] << "\t"; // 1 2 3 2 1 3 2 1 3 1 2 3 2 3 1 1 2 3 3 1 2 1 2 3 3 1 2 1 2 3
+                            }
+                            std::cerr << std::endl;
+#endif
+
                             // we'll sample from all path steps
                             std::uniform_int_distribution<uint64_t> dis_step = std::uniform_int_distribution<uint64_t>(0, np_bv.size() - 1);
                             std::uniform_int_distribution<uint64_t> flip(0, 1);
@@ -251,9 +283,24 @@ namespace odgi {
                                     uint64_t term_i_length = graph.get_length(term_i);
                                     uint64_t term_j_length = graph.get_length(term_j);
 
+#ifdef debug_array
+                                    std::cerr<< "as_integers(step_a)[0]: " << as_integers(step_a)[0] << "; as_integers(step_a)[1]: " << as_integers(step_a)[1] << std::endl; // 3; 0 (path, rank)
+                                    std::cerr<< "as_integers(step_b)[0]: " << as_integers(step_b)[0] << "; as_integers(step_b)[1]: " << as_integers(step_b)[1] << std::endl; // 3; 9 (path, rank)
+                                    std::cerr << "number_bool_packing::unpack_number(term_i): " << number_bool_packing::unpack_number(term_i) << std::endl; // 0
+                                    std::cerr << "number_bool_packing::unpack_number(term_j): " << number_bool_packing::unpack_number(term_j) << std::endl; // 14
+                                    std::cerr << "term_i_length: " << term_i_length << std::endl; // 8
+                                    std::cerr << "term_j_length: " << term_j_length << std::endl; // 11
+#endif
+
                                     // adjust the positions to the node starts
-                                    size_t pos_in_path_a = path_index.get_position_of_step(step_a);
-                                    size_t pos_in_path_b = path_index.get_position_of_step(step_b);
+                                    size_t pos_in_path_a = path_index.get_position_of_step(step_a); // return xppath.positions[step_rank];   There is a position array for each path. Rank is the local id. 
+                                    size_t pos_in_path_b = path_index.get_position_of_step(step_b); 
+
+#ifdef debug_array
+                                    if (term_updates_local > 2) {
+                                        exit(0);
+                                    }
+#endif
 
                                     // determine which end we're working with for each node
                                     bool term_i_is_rev = graph.get_is_reverse(term_i);

@@ -1,5 +1,5 @@
 #include "xp.hpp"
-
+#define debug_array
 // #define debug_load
 // #define debug_np
 namespace xp {
@@ -379,6 +379,19 @@ namespace xp {
     size_t XP::get_position_of_step(const step_handle_t& step_handle) const {
         const auto& xppath = *paths[as_integer(get_path_handle_of_step(step_handle)) - 1];
         auto& step_rank = as_integers(step_handle)[1];
+
+#ifdef debug_array
+        std::cerr << "xppath.positions.size(): " << xppath.positions.size() << std::endl;
+        for (size_t i = 0; i < xppath.positions.size(); i++) {
+            std::cerr << xppath.positions[i] << " ";
+        }
+        std::cerr << "step_rank: " << step_rank << std::endl;
+        std::cerr << "xppath.positions[step_rank]: " << xppath.positions[step_rank] << std::endl;
+        // xppath.positions.size(): 10
+        // 0 8 9 10 13 14 33 34 38 39 step_rank: 9
+        // xppath.positions[step_rank]: 39
+#endif
+
         return xppath.positions[step_rank];
     }
 
