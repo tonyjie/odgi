@@ -539,6 +539,7 @@ add_library(odgi_objs OBJECT
   ${CMAKE_SOURCE_DIR}/src/subcommand/layout0_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/layout_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/draw_main.cpp
+  ${CMAKE_SOURCE_DIR}/src/subcommand/draw_postproc_main.cpp # [Jiajie] add draw postprocess subcommand: input is a txt file: coord.txt
   ${CMAKE_SOURCE_DIR}/src/subcommand/flatten_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/break_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/pathindex_main.cpp
