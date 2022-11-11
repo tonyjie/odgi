@@ -119,7 +119,6 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
                 *x2 += r_x;
                 *y2 += r_y;
             }
-            // TODO synchronize threads after each iteration
         }
     }
 }
