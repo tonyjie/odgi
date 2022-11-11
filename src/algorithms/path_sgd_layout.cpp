@@ -194,19 +194,19 @@ namespace odgi {
 
 #ifdef debug_array
                             std::cerr << "np_bv.size(): " << np_bv.size() << std::endl;    // 30
-                            for (size_t i = 0; i < np_bv.size(); ++i) {
-                                std::cerr << np_bv[i] << "\t"; // 1 0 0 1 1; 0 1 1 0 1; 0 0 1 0 1; 1 0 0 1 1; 0 1 0 0 1; 1 0 1 0 0
-                            }
+                            // for (size_t i = 0; i < np_bv.size(); ++i) {
+                            //     std::cerr << np_bv[i] << "\t"; // 1 0 0 1 1; 0 1 1 0 1; 0 0 1 0 1; 1 0 0 1 1; 0 1 0 0 1; 1 0 1 0 0
+                            // }
                             std::cerr << std::endl;
                             std::cerr << "nr_iv.size(): " << nr_iv.size() << std::endl;    // 30
-                            for (size_t i = 0; i < nr_iv.size(); ++i) {
-                                std::cerr << nr_iv[i] << "\t"; // 1 1 1 2 2 2 3 3 3 4 4 4 5 5 5 6 6 6 7 7 7 8 8 8 9 9 9 10 10 10
-                            }
+                            // for (size_t i = 0; i < nr_iv.size(); ++i) {
+                            //     std::cerr << nr_iv[i] << "\t"; // 1 1 1 2 2 2 3 3 3 4 4 4 5 5 5 6 6 6 7 7 7 8 8 8 9 9 9 10 10 10
+                            // }
                             std::cerr << std::endl;
                             std::cerr << "npi_iv.size(): " << npi_iv.size() << std::endl;  // 30
-                            for (size_t i = 0; i < npi_iv.size(); ++i) {
-                                std::cerr << npi_iv[i] << "\t"; // 1 2 3 2 1 3 2 1 3 1 2 3 2 3 1 1 2 3 3 1 2 1 2 3 3 1 2 1 2 3
-                            }
+                            // for (size_t i = 0; i < npi_iv.size(); ++i) {
+                            //     std::cerr << npi_iv[i] << "\t"; // 1 2 3 2 1 3 2 1 3 1 2 3 2 3 1 1 2 3 3 1 2 1 2 3 3 1 2 1 2 3
+                            // }
                             std::cerr << std::endl;
 #endif
 
