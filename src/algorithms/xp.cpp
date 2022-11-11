@@ -382,9 +382,9 @@ namespace xp {
 
 #ifdef debug_array
         std::cerr << "xppath.positions.size(): " << xppath.positions.size() << std::endl;
-        for (size_t i = 0; i < xppath.positions.size(); i++) {
-            std::cerr << xppath.positions[i] << " ";
-        }
+        // for (size_t i = 0; i < xppath.positions.size(); i++) {
+        //     std::cerr << xppath.positions[i] << " ";
+        // }
         std::cerr << "step_rank: " << step_rank << std::endl;
         std::cerr << "xppath.positions[step_rank]: " << xppath.positions[step_rank] << std::endl;
         // xppath.positions.size(): 10
