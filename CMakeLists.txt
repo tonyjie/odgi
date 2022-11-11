@@ -538,6 +538,7 @@ add_library(odgi_objs OBJECT
   ${CMAKE_SOURCE_DIR}/src/subcommand/groom_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/layout0_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/layout_main.cpp
+  ${CMAKE_SOURCE_DIR}/src/subcommand/load_preproc_main.cpp # [Jiajie] add load preprocess subcommand: load the graph (.og), and stores the arrays required for the 2d layout algorithm
   ${CMAKE_SOURCE_DIR}/src/subcommand/draw_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/draw_postproc_main.cpp # [Jiajie] add draw postprocess subcommand: input is a txt file: coord.txt
   ${CMAKE_SOURCE_DIR}/src/subcommand/flatten_main.cpp

@@ -71,21 +71,21 @@ int main_draw_postproc(int argc, char**argv) { // draw postprocess
 
     if (!dg_in_file) {
         std::cerr
-            << "[odgi::draw] error: please specify an input file from where to load the graph via -i=[FILE], --idx=[FILE]."
+            << "[odgi::draw-postproc] error: please specify an input file from where to load the graph via -i=[FILE], --idx=[FILE]."
             << std::endl;
         return 1;
     }
 
 	if (!layout_in_file) {
 		std::cerr
-				<< "[odgi::draw] error: please specify an input file from where to load the layout from via -c=[FILE], --coords-in=[FILE]."
+				<< "[odgi::draw-postproc] error: please specify an input file from where to load the layout from via -c=[FILE], --coords-in=[FILE]."
 				<< std::endl;
 		return 1;
 	}
 
     if (!tsv_out_file && !svg_out_file && !png_out_file) {
         std::cerr
-            << "[odgi::draw] error: please specify an output file to where to store the layout via -p/--png=[FILE], -s/--svg=[FILE], -T/--tsv=[FILE]"
+            << "[odgi::draw-postproc] error: please specify an output file to where to store the layout via -p/--png=[FILE], -s/--svg=[FILE], -T/--tsv=[FILE]"
             << std::endl;
         return 1;
     }
@@ -106,7 +106,7 @@ int main_draw_postproc(int argc, char**argv) { // draw postprocess
     }
 
     if (graph.max_node_id() >= graph.get_node_count() + 1){
-        std::cerr << "[odgi::draw] error: the node IDs are not compacted. Please run 'odgi sort' using -O, --optimize to optimize the graph." << std::endl;
+        std::cerr << "[odgi::draw-postproc] error: the node IDs are not compacted. Please run 'odgi sort' using -O, --optimize to optimize the graph." << std::endl;
         exit(1);
     }
 
