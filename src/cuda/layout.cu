@@ -39,25 +39,24 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
                 uint32_t path_idx = rand_path(gen);
                 path_t p = path_data.paths[path_idx];
 
-                std::uniform_int_distribution<uint32_t> rand_s1(0, p.step_count-1);
+                std::uniform_int_distribution<uint32_t> rand_step(0, p.step_count-1);
+
+                uint32_t s1_idx = rand_step(gen);
                 // TODO implement cooling with zipf distribution
-                std::uniform_int_distribution<uint32_t> rand_s2(0, p.step_count-2);
-
-
-                uint32_t s1_idx = rand_s1(gen);
-                uint32_t s2_idx = rand_s2(gen);
-                if (s1_idx == s2_idx)
-                    s2_idx++;
+                uint32_t s2_idx;
+                do {
+                    s2_idx = rand_step(gen);
+                } while (s1_idx == s2_idx);
 
                 uint32_t n1_id = p.elements[s1_idx].node_id;
                 int64_t n1_pos_in_path = p.elements[s1_idx].pos;
                 bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
-                n1_pos_in_path = abs(n1_pos_in_path);
+                n1_pos_in_path = std::abs(n1_pos_in_path);
 
                 uint32_t n2_id = p.elements[s2_idx].node_id;
                 int64_t n2_pos_in_path = p.elements[s2_idx].pos;
                 bool n2_is_rev = (n2_pos_in_path < 0)? true: false;
-                n2_pos_in_path = abs(n2_pos_in_path);
+                n2_pos_in_path = std::abs(n2_pos_in_path);
 
                 uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
                 bool n1_use_other_end = flip(gen);
@@ -108,7 +107,7 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
 
                 double mag = sqrt(dx * dx + dy * dy);
                 double delta = mu * (mag - d_ij) / 2.0;
-                double delta_abs = abs(delta);
+                //double delta_abs = std::abs(delta);
 
                 // TODO implement delta max stop functionality
                 double r = delta / mag;
@@ -118,7 +117,7 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
                 *x1 -= r_x;
                 *y1 -= r_y;
                 *x2 += r_x;
-                *y2 += r_x;
+                *y2 += r_y;
             }
             // TODO synchronize threads after each iteration
         }
@@ -150,7 +149,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     const double eta_min = eps / w_max;
     const double lambda = log(eta_max / eta_min) / ((double) iter_max - 1);
     for (int32_t i = 0; i < config.iter_max; i++) {
-        etas[i] = eta_max * exp(-lambda * (abs(i - iter_with_max_learning_rate)));
+        etas[i] = eta_max * exp(-lambda * (std::abs(i - iter_with_max_learning_rate)));
     }
 
 
