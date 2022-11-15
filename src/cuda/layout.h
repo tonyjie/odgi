@@ -4,6 +4,8 @@
 #include <vector>
 #include <omp.h>
 #include <random>
+#include <sstream>
+#include <iomanip>
 
 #include "odgi.hpp"
 #include "XoshiroCpp.hpp"
