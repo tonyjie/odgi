@@ -47,6 +47,7 @@ struct layout_config_t {
     double eta_max;
     double eps;
     int32_t iter_with_max_learning_rate;
+    int nthreads;
 };
 
 

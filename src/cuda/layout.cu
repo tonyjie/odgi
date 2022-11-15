@@ -14,8 +14,8 @@ __global__ void cuda_device_layout(cuda::layout_config_t config, double *etas, c
 
 
 void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
-    std::cout << "cuda cpu layout" << std::endl;
-    int nbr_threads = 40;
+    int nbr_threads = config.nthreads;
+    std::cout << "cuda cpu layout (" << nbr_threads << " threads)" << std::endl;
     std::vector<uint64_t> path_dist;
     for (int p = 0; p < path_data.path_count; p++) {
         path_dist.push_back(uint64_t(path_data.paths[p].step_count));
