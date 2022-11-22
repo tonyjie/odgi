@@ -4,6 +4,9 @@
 #include <vector>
 #include <omp.h>
 #include <random>
+#include <math.h>
+#include <curand.h>
+#include <curand_kernel.h>
 #include <sstream>
 #include <iomanip>
 
