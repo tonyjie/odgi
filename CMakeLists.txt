@@ -690,7 +690,8 @@ set(odgi_INCLUDES
   "${dirtyzipf_INCLUDE}"
   "${xoshiro_INCLUDE}"
   "${atomicbitvector_INCLUDE}"
-  "${mio_INCLUDE}")
+  "${mio_INCLUDE}"
+  "${CUDA_INCLUDE_DIRS}")
 
 set(odgi_LIBS
   jemalloc
