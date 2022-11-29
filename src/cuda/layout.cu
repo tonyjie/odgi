@@ -335,8 +335,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     const double eta_min = eps / w_max;
     const double lambda = log(eta_max / eta_min) / ((double) iter_max - 1);
     for (int32_t i = 0; i < config.iter_max; i++) {
-        // TODO check for nan values (when iter_max == 1)
-        etas[i] = eta_max * exp(-lambda * (std::abs(i - iter_with_max_learning_rate)));
+        double eta = eta_max * exp(-lambda * (std::abs(i - iter_with_max_learning_rate)));
+        etas[i] = isnan(eta)? eta_min : eta;
     }
 
 
