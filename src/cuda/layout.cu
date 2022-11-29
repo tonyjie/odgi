@@ -9,7 +9,7 @@ __global__ void cuda_device_init(curandState *rnd_state) {
     curand_init(42, tid, 0, &rnd_state[threadIdx.x]);
 }
 
-__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double *etas, cuda::node_data_t node_data, cuda::path_data_t path_data, int *counter) {
+__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double eta, cuda::node_data_t node_data, cuda::path_data_t path_data, int *counter) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     // get path
@@ -60,7 +60,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     double w_ij = 1.0 / term_dist;
 
-    double mu = etas[iter] * w_ij;
+    double mu = eta * w_ij;
     if (mu > 1.0) {
         mu = 1.0;
     }
@@ -70,13 +70,13 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     int n1_offset = n1_use_other_end? 2: 0;
     int n2_offset = n2_use_other_end? 2: 0;
 
-    double *x1 = &node_data.nodes[n1_id].coords[n1_offset];
-    double *x2 = &node_data.nodes[n2_id].coords[n2_offset];
-    double *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
-    double *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+    float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
+    float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
+    float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
+    float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
 
-    double dx = *x1 - *x2;
-    double dy = *y1 - *y2;
+    double dx = double(*x1 - *x2);
+    double dy = double(*y1 - *y2);
 
     if (dx == 0.0) {
         dx = 1e-9;
@@ -91,10 +91,10 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     double r_x = r * dx;
     double r_y = r * dy;
 
-    *x1 -= r_x;
-    *y1 -= r_y;
-    *x2 += r_x;
-    *y2 += r_y;
+    atomicAdd(x1, -r_x);
+    atomicAdd(y1, -r_y);
+    atomicAdd(x2, r_x);
+    atomicAdd(y2, r_y);
 
     atomicAdd(counter, 1);
 }
@@ -232,13 +232,13 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
                 before_load = std::chrono::high_resolution_clock::now();
                 total_duration_compute_first += std::chrono::duration_cast<std::chrono::nanoseconds>(before_load - start_sgd);
 #endif
-                double *x1 = &node_data.nodes[n1_id].coords[n1_offset];
-                double *x2 = &node_data.nodes[n2_id].coords[n2_offset];
-                double *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
-                double *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+                float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
+                float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
+                float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
+                float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
 
-                double dx = *x1 - *x2;
-                double dy = *y1 - *y2;
+                double dx = float(*x1 - *x2);
+                double dy = float(*y1 - *y2);
 #ifdef profiling
                 after_load = std::chrono::high_resolution_clock::now();
                 total_duration_load += std::chrono::duration_cast<std::chrono::nanoseconds>(after_load - before_load);
@@ -260,10 +260,10 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
                 before_store = std::chrono::high_resolution_clock::now();
                 total_duration_compute_second += std::chrono::duration_cast<std::chrono::nanoseconds>(before_store - after_load);
 #endif
-                *x1 -= r_x;
-                *y1 -= r_y;
-                *x2 += r_x;
-                *y2 += r_y;
+                *x1 -= float(r_x);
+                *y1 -= float(r_y);
+                *x2 += float(r_x);
+                *y2 += float(r_y);
 #ifdef profiling
                 after_store = std::chrono::high_resolution_clock::now();
                 total_duration_store += std::chrono::duration_cast<std::chrono::nanoseconds>(after_store - before_store);
@@ -335,6 +335,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     const double eta_min = eps / w_max;
     const double lambda = log(eta_max / eta_min) / ((double) iter_max - 1);
     for (int32_t i = 0; i < config.iter_max; i++) {
+        // TODO check for nan values (when iter_max == 1)
         etas[i] = eta_max * exp(-lambda * (std::abs(i - iter_with_max_learning_rate)));
     }
 
@@ -362,10 +363,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         n_tmp->seq_length = graph.get_length(h);
 
         // copy random coordinates
-        n_tmp->coords[0] = X[node_idx * 2].load();
-        n_tmp->coords[1] = Y[node_idx * 2].load();
-        n_tmp->coords[2] = X[node_idx * 2 + 1].load();
-        n_tmp->coords[3] = Y[node_idx * 2 + 1].load();
+        n_tmp->coords[0] = float(X[node_idx * 2].load());
+        n_tmp->coords[1] = float(Y[node_idx * 2].load());
+        n_tmp->coords[2] = float(X[node_idx * 2 + 1].load());
+        n_tmp->coords[3] = float(Y[node_idx * 2 + 1].load());
     }
 
 
@@ -423,11 +424,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
 
     auto start_compute = std::chrono::high_resolution_clock::now();
-#define USE_CUDA
-#ifdef USE_CUDA
+#define USE_GPU
+#ifdef USE_GPU
     std::cout << "cuda gpu layout" << std::endl;
 
-    const int block_size = 10; //24;
+    // TODO use different block_size and/or block_nbr when computing small pangenome to prevent NaN coordinates
+    const int block_size = 1024;
     const int block_nbr = (config.min_term_updates + block_size - 1) / block_size;
     curandState *rnd_state;
     cudaMallocManaged(&rnd_state, block_size * sizeof(curandState));
@@ -439,8 +441,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     *counter = 0;
 
     for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas, node_data, path_data, counter);
-        cudaDeviceSynchronize();
+        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], node_data, path_data, counter);
+        cudaError_t error = cudaDeviceSynchronize();
+        // TODO check for error
+        std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
 
     std::cout << "thread counter: " << *counter << std::endl;
@@ -461,10 +465,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         //assert(n->coords[2] == X[node_idx * 2 + 1].load());
         //assert(n->coords[3] == Y[node_idx * 2 + 1].load());
 
-        X[node_idx * 2].store(n->coords[0]);
-        Y[node_idx * 2].store(n->coords[1]);
-        X[node_idx * 2 + 1].store(n->coords[2]);
-        Y[node_idx * 2 + 1].store(n->coords[3]);
+        X[node_idx * 2].store(double(n->coords[0]));
+        Y[node_idx * 2].store(double(n->coords[1]));
+        X[node_idx * 2 + 1].store(double(n->coords[2]));
+        Y[node_idx * 2 + 1].store(double(n->coords[3]));
     }
 
 
@@ -474,8 +478,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         cudaFree(path_data.paths[i].elements);
     }
     cudaFree(path_data.paths);
+#ifdef USE_GPU
     cudaFree(rnd_state);
     cudaFree(counter);
+#endif
 
 
 #ifdef cuda_layout_profiling

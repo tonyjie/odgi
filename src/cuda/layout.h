@@ -22,7 +22,7 @@ namespace cuda {
 
 struct node_t {
     int32_t seq_length;
-    double coords[4];
+    float coords[4];
 };
 struct node_data_t {
     uint32_t node_count;
