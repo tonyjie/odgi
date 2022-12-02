@@ -15,6 +15,9 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     // get path
     uint32_t path_idx = blockIdx.x % path_data.path_count;
     path_t p = path_data.paths[path_idx];
+    if (p.step_count < 2) {
+        return;
+    }
 
     uint32_t s1_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
 
@@ -156,6 +159,9 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
                 // get path
                 uint32_t path_idx = rand_path(gen);
                 path_t p = path_data.paths[path_idx];
+                if (p.step_count < 2) {
+                    continue;
+                }
 
                 std::uniform_int_distribution<uint32_t> rand_step(0, p.step_count-1);
 
