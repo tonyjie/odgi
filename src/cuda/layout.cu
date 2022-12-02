@@ -402,7 +402,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             odgi::handle_t h = graph.get_handle_of_step(s);
             //std::cout << graph.get_id(h) << std::endl;
 
-            cur_path[step_idx].node_id = graph.get_id(h);
+            cur_path[step_idx].node_id = graph.get_id(h) - 1;
             // store position negative when handle reverse
             if (graph.get_is_reverse(h)) {
                 cur_path[step_idx].pos = -pos;
