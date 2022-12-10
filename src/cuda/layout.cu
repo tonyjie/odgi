@@ -6,14 +6,27 @@ namespace cuda {
 
 __global__ void cuda_device_init(curandState *rnd_state) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    curand_init(42, tid, 0, &rnd_state[threadIdx.x]);
+    curand_init(42+tid, tid, 0, &rnd_state[threadIdx.x]);
 }
 
-__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double eta, cuda::node_data_t node_data, cuda::path_data_t path_data, int *counter) {
+__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double eta, cuda::node_data_t node_data,
+        cuda::path_data_t path_data) { //, int *counter) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // get path
-    uint32_t path_idx = blockIdx.x % path_data.path_count;
+    // select path
+    int32_t offset = (int32_t)(ceil((curand_uniform(rnd_state) * (gridDim.x + 1.0))) - 1.0);
+    uint32_t step_idx = ((uint32_t) (offset * blockDim.x + threadIdx.x)) % (uint32_t) path_data.total_path_steps;
+    uint32_t path_idx;  // = blockIdx.x % path_data.path_count;
+    uint32_t start_step_path = 0;
+    for (int pidx = 0; pidx < path_data.path_count; pidx++) {
+        if (step_idx >= start_step_path && step_idx < start_step_path + path_data.paths[pidx].step_count) {
+            path_idx = pidx;
+            break;
+        } else {
+            start_step_path += path_data.paths[pidx].step_count;
+        }
+    }
+
     path_t p = path_data.paths[path_idx];
     if (p.step_count < 2) {
         return;
@@ -77,9 +90,13 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
     float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
     float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+    double x1_val = double(atomicAdd(x1, 0.0));
+    double x2_val = double(atomicAdd(x2, 0.0));
+    double y1_val = double(atomicAdd(y1, 0.0));
+    double y2_val = double(atomicAdd(y2, 0.0));
 
-    double dx = double(*x1 - *x2);
-    double dy = double(*y1 - *y2);
+    double dx = x1_val - x2_val;
+    double dy = y1_val - y2_val;
 
     if (dx == 0.0) {
         dx = 1e-9;
@@ -93,13 +110,12 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     double r = delta / mag;
     double r_x = r * dx;
     double r_y = r * dy;
-
-    atomicAdd(x1, -r_x);
-    atomicAdd(y1, -r_y);
-    atomicAdd(x2, r_x);
-    atomicAdd(y2, r_y);
-
-    atomicAdd(counter, 1);
+    // TODO check current value before updating
+    atomicExch(x1, float(x1_val - r_x));
+    atomicExch(x2, float(x2_val + r_x));
+    atomicExch(y1, float(y1_val - r_y));
+    atomicExch(y2, float(y2_val + r_y));
+    //atomicAdd(counter, 1);
 }
 
 
@@ -121,7 +137,7 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
 
         const int steps_per_thread = config.min_term_updates / nbr_threads;
 
-#define profiling
+//#define profiling
 #ifdef profiling
         auto total_duration_dist = std::chrono::duration<double>::zero(); // total time on computing distance: in seconds
         auto total_duration_sgd = std::chrono::duration<double>::zero(); // total time on SGD: in seconds
@@ -380,6 +396,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     uint32_t path_count = graph.get_path_count();
     cuda::path_data_t path_data;
     path_data.path_count = path_count;
+    path_data.total_path_steps = 0;
     cudaMallocManaged(&path_data.paths, node_count * sizeof(cuda::path_t));
 
     vector<odgi::path_handle_t> path_handles{};
@@ -387,10 +404,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     graph.for_each_path_handle(
         [&] (const odgi::path_handle_t& p) {
             path_handles.push_back(p);
+            path_data.total_path_steps += graph.get_step_count(p);
         });
 
     // TODO parallelise with openmp
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
+        // TODO: sort paths for uniform distribution? Largest should not just be next to each other
         odgi::path_handle_t p = path_handles[path_idx];
         std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
 
@@ -433,27 +452,30 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #define USE_GPU
 #ifdef USE_GPU
     std::cout << "cuda gpu layout" << std::endl;
+    std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 
     // TODO use different block_size and/or block_nbr when computing small pangenome to prevent NaN coordinates
-    const int block_size = 1024;
-    const int block_nbr = (config.min_term_updates + block_size - 1) / block_size;
+    const uint64_t block_size = 1024;
+    uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
+    std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
     curandState *rnd_state;
     cudaMallocManaged(&rnd_state, block_size * sizeof(curandState));
     cuda_device_init<<<1, block_size>>>(rnd_state);
 
     // TODO remove counter
-    int *counter;
-    cudaMallocManaged(&counter, sizeof(int));
-    *counter = 0;
+    //int *counter;
+    //error = cudaMallocManaged(&counter, sizeof(int));
+    //std::cout << "[6] CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+    //*counter = 0;
 
     for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], node_data, path_data, counter);
+        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], node_data, path_data); //, counter);
         cudaError_t error = cudaDeviceSynchronize();
         // TODO check for error
         std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
 
-    std::cout << "thread counter: " << *counter << std::endl;
+    //std::cout << "thread counter: " << *counter << std::endl;
 #else
     cpu_layout(config, etas, node_data, path_data);
 #endif
@@ -466,15 +488,29 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // copy coords back to X, Y vectors
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
         cuda::node_t *n = &node_data.nodes[node_idx];
-        //assert(n->coords[0] == X[node_idx * 2].load());
-        //assert(n->coords[1] == Y[node_idx * 2].load());
-        //assert(n->coords[2] == X[node_idx * 2 + 1].load());
-        //assert(n->coords[3] == Y[node_idx * 2 + 1].load());
 
-        X[node_idx * 2].store(double(n->coords[0]));
-        Y[node_idx * 2].store(double(n->coords[1]));
-        X[node_idx * 2 + 1].store(double(n->coords[2]));
-        Y[node_idx * 2 + 1].store(double(n->coords[3]));
+        for (int i = 0; i < 4; i++) {
+            float coord = n->coords[i];
+            if (!isfinite(coord)) {
+                std::cout << "WARNING: invalid coordiate" << std::endl;
+                coord = 0.0;
+            }
+            switch (i) {
+                case 0:
+                    X[node_idx * 2].store(double(coord));
+                    break;
+                case 1:
+                    Y[node_idx * 2].store(double(coord));
+                    break;
+                case 2:
+                    X[node_idx * 2 + 1].store(double(coord));
+                    break;
+                case 3:
+                    Y[node_idx * 2 + 1].store(double(coord));
+                    break;
+            }
+        }
+        //std::cout << "coords of " << node_idx << ": [" << X[node_idx*2] << "; " << Y[node_idx*2] << "] ; [" << X[node_idx*2+1] << "; " << Y[node_idx*2+1] <<"]\n";
     }
 
 
@@ -486,7 +522,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaFree(path_data.paths);
 #ifdef USE_GPU
     cudaFree(rnd_state);
-    cudaFree(counter);
+    //cudaFree(counter);
 #endif
 
 
