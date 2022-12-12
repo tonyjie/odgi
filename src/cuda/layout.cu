@@ -11,6 +11,7 @@ __global__ void cuda_device_init(curandState *rnd_state) {
 
 __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double eta, cuda::node_data_t node_data,
         cuda::path_data_t path_data) { //, int *counter) {
+    // TODO pipeline step kernel; get nodes and distance for next step (hide memory access time?)
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     // select path
@@ -119,7 +120,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 }
 
 
-void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
+void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
     int nbr_threads = config.nthreads;
     std::cout << "cuda cpu layout (" << nbr_threads << " threads)" << std::endl;
     std::vector<uint64_t> path_dist;
@@ -188,10 +189,36 @@ void cpu_layout(cuda::layout_config_t config, double *etas, cuda::node_data_t &n
                 total_duration_one_step_gen += std::chrono::duration_cast<std::chrono::nanoseconds>(one_step_gen - start_dist);
 #endif
                 uint32_t s2_idx;
-                do {
-                    s2_idx = rand_step(gen);
-                } while (s1_idx == s2_idx);
-
+                // TODO check exact first cooling iteration
+                if (iter + 1 >= config.first_cooling_iteration || flip(gen)) {
+                    if (s1_idx > 0 && flip(gen) || s1_idx == p.step_count-1) {
+                        // go backward
+                        uint64_t jump_space = std::min(config.space, (uint64_t) s1_idx);
+                        uint64_t space = jump_space;
+                        if (jump_space > config.space_max) {
+                            space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
+                        }
+                        dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, jump_space, config.theta, zetas[space]);
+                        dirtyzipf::dirty_zipfian_int_distribution<uint64_t> z(z_p);
+                        uint32_t z_i = (uint32_t) z(gen);
+                        s2_idx = s1_idx - z_i;
+                    } else {
+                        // go forward
+                        uint64_t jump_space = std::min(config.space, (uint64_t) (p.step_count - s1_idx - 1));
+                        uint64_t space = jump_space;
+                        if (jump_space > config.space_max) {
+                            space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
+                        }
+                        dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, jump_space, config.theta, zetas[space]);
+                        dirtyzipf::dirty_zipfian_int_distribution<uint64_t> z(z_p);
+                        uint32_t z_i = (uint32_t) z(gen);
+                        s2_idx = s1_idx + z_i;
+                    }
+                } else {
+                    do {
+                        s2_idx = rand_step(gen);
+                    } while (s1_idx == s2_idx);
+                }
 #ifdef profiling
                 two_step_gen = std::chrono::high_resolution_clock::now();
                 total_duration_two_step_gen += std::chrono::duration_cast<std::chrono::nanoseconds>(two_step_gen - one_step_gen);
@@ -342,6 +369,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     std::cout << "Hello world from CUDA host" << std::endl;
     std::cout << "iter_max: " << config.iter_max << std::endl;
+    std::cout << "first_cooling_iteration: " << config.first_cooling_iteration << std::endl;
     std::cout << "min_term_updates: " << config.min_term_updates << std::endl;
     std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
 
@@ -477,7 +505,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     //std::cout << "thread counter: " << *counter << std::endl;
 #else
-    cpu_layout(config, etas, node_data, path_data);
+    cpu_layout(config, etas, zetas, node_data, path_data);
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
@@ -520,6 +548,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         cudaFree(path_data.paths[i].elements);
     }
     cudaFree(path_data.paths);
+    cudaFree(zetas);
 #ifdef USE_GPU
     cudaFree(rnd_state);
     //cudaFree(counter);

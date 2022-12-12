@@ -12,6 +12,7 @@
 
 #include "odgi.hpp"
 #include "XoshiroCpp.hpp"
+#include "dirty_zipfian_int_distribution.h"
 
 
 #define cuda_layout_profiling
@@ -47,12 +48,18 @@ struct path_data_t {
 };
 
 
+// TODO: make parameters constant?
 struct layout_config_t {
     uint64_t iter_max;
     uint64_t min_term_updates;
     double eta_max;
     double eps;
     int32_t iter_with_max_learning_rate;
+    uint32_t first_cooling_iteration;
+    double theta;
+    uint64_t space;
+    uint64_t space_max;
+    uint64_t space_quantization_step;
     int nthreads;
 };
 
