@@ -14,6 +14,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     // TODO pipeline step kernel; get nodes and distance for next step (hide memory access time?)
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
+    // TODO improve discrete distribution selection
     // select path
     int32_t offset = (int32_t)(ceil((curand_uniform(rnd_state) * (gridDim.x + 1.0))) - 1.0);
     uint32_t step_idx = ((uint32_t) (offset * blockDim.x + threadIdx.x)) % (uint32_t) path_data.total_path_steps;
@@ -183,13 +184,11 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 std::uniform_int_distribution<uint32_t> rand_step(0, p.step_count-1);
 
                 uint32_t s1_idx = rand_step(gen);
-                // TODO implement cooling with zipf distribution
 #ifdef profiling
                 one_step_gen = std::chrono::high_resolution_clock::now();
                 total_duration_one_step_gen += std::chrono::duration_cast<std::chrono::nanoseconds>(one_step_gen - start_dist);
 #endif
                 uint32_t s2_idx;
-                // TODO check exact first cooling iteration
                 if (iter + 1 >= config.first_cooling_iteration || flip(gen)) {
                     if (s1_idx > 0 && flip(gen) || s1_idx == p.step_count-1) {
                         // go backward
@@ -435,11 +434,11 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             path_data.total_path_steps += graph.get_step_count(p);
         });
 
-    // TODO parallelise with openmp
+#pragma omp parallel for num_threads(config.nthreads)
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
         // TODO: sort paths for uniform distribution? Largest should not just be next to each other
         odgi::path_handle_t p = path_handles[path_idx];
-        std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
+        //std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
 
         int step_count = graph.get_step_count(p);
         path_data.paths[path_idx].step_count = step_count;
