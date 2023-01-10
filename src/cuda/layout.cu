@@ -424,7 +424,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cuda::path_data_t path_data;
     path_data.path_count = path_count;
     path_data.total_path_steps = 0;
-    cudaMallocManaged(&path_data.paths, node_count * sizeof(cuda::path_t));
+    cudaMallocManaged(&path_data.paths, path_count * sizeof(cuda::path_t));
 
     vector<odgi::path_handle_t> path_handles{};
     path_handles.reserve(path_count);
@@ -508,6 +508,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
     curandState *rnd_state;
+    // TODO increase number of curandState objects; each thread in SM own curandState?
     cudaMallocManaged(&rnd_state, block_size * sizeof(curandState));
     cuda_device_init<<<1, block_size>>>(rnd_state);
 
