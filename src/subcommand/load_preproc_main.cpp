@@ -6,6 +6,7 @@
 #include "utils.hpp"
 
 // #define debug_load_preproc
+// #define debug_show_step_count
 namespace odgi {
 
 using namespace odgi::subcommand;
@@ -126,11 +127,19 @@ int main_load_preproc(int argc, char **argv) {
     // get positions & vis_id
     // iterate through paths
     f_pos << graph.get_path_count() << endl;
+#ifdef debug_show_step_count
+    int path_count_idx = 0;
+#endif
     graph.for_each_path_handle([&](const path_handle_t &path) {
         string path_name = graph.get_path_name(path);
         int32_t step_count = graph.get_step_count(path);
 
         f_pos << step_count << endl;
+
+#ifdef debug_show_step_count
+        path_count_idx ++;
+        cerr << "path_count_idx: " << path_count_idx << "; path: " << path_name << "; step_count: " << step_count << endl;
+#endif
 
         int32_t positions[step_count * 2];
         int32_t vis_id[step_count * 2];
