@@ -19,21 +19,19 @@ __device__ double compute_zeta(uint32_t n, double theta) {
     return ans;
 }
 
-// TODO remove a (always set to 1)
-__device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t a, uint32_t n, double theta, double zetan) {
+__device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t n, double theta, double zetan) {
     // TODO Compute zetan on GPU (with exact pow, instead of dirtyzipfian pow)
     double zeta2 = compute_zeta(2.0, theta);
     double alpha = 1.0 / (1.0 - theta);
-    double eta = (1.0 - pow(2.0 / double(n - a + 1), 1.0 - theta)) / (1.0 - zeta2 / zetan);
+    double eta = (1.0 - pow(2.0 / double(n), 1.0 - theta)) / (1.0 - zeta2 / zetan);
 
     double u = curand_uniform(rnd_state);
     double uz = u * zetan;
 
     int64_t val = 0;
-    if (uz < 1.0) val = a;
-    else if (uz < 1.0 + pow(0.5, theta)) val = a + 1;
-    // TODO remove strange workaround: float in double to prevent resource overload error
-    else val = a + int64_t(double(n - a + 1.0) * pow(eta * u - eta + 1.0, alpha));
+    if (uz < 1.0) val = 1;
+    else if (uz < 1.0 + pow(0.5, theta)) val = 2;
+    else val = 1 + int64_t(double(n) * pow(eta * u - eta + 1.0, alpha));
 
     if (val > n) {
         //printf("WARNING: val: %ld, n: %u\n", val, uint32_t(n));
@@ -93,7 +91,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
             space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
         }
 
-        uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], 1, jump_space, config.theta, zetas[space]);
+        uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], jump_space, config.theta, zetas[space]);
 
         if (backward) {
             if (!(z_i <= s1_idx)) {
