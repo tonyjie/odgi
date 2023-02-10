@@ -77,38 +77,39 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     // TODO improve branching: let entire warp / threadgroup decide on using zipf distribution
     if (iter >= config.first_cooling_iteration || curand_uniform(rnd_state + threadIdx.x) <= 0.5) {
-        // TODO improve branching: combine backward / forward
+        bool backward;
+        uint32_t jump_space;
         if (s1_idx > 0 && (curand_uniform(rnd_state + threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
             // go backward
-            uint32_t jump_space = min(config.space, s1_idx);
-            uint32_t space = jump_space;
-            if (jump_space > config.space_max) {
-                space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
-            }
+            backward = true;
+            jump_space = min(config.space, s1_idx);
+        } else {
+            // go forward
+            backward = false;
+            jump_space = min(config.space, p.step_count - s1_idx - 1);
+        }
+        uint32_t space = jump_space;
+        if (jump_space > config.space_max) {
+            space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
+        }
 
-            uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], 1, jump_space, config.theta, zetas[space]);
+        uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], 1, jump_space, config.theta, zetas[space]);
+
+        if (backward) {
             if (!(z_i <= s1_idx)) {
                 printf("Error (thread %i): %u - %u\n", threadIdx.x, s1_idx, z_i);
                 printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, zetas[space]);
             }
             assert(z_i <= s1_idx);
-            s2_idx = s1_idx - z_i;
         } else {
-            // go forward
-            uint32_t jump_space = min(config.space, p.step_count - s1_idx - 1);
-            uint32_t space = jump_space;
-            if (jump_space > config.space_max) {
-                space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
-            }
-
-            uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], 1, jump_space, config.theta, zetas[space]);
             if (!(z_i <= p.step_count - s1_idx - 1)) {
                 printf("Error (thread %i): %u + %u, step_count %u\n", threadIdx.x, s1_idx, z_i, p.step_count);
                 printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, zetas[space]);
             }
             assert(s1_idx + z_i < p.step_count);
-            s2_idx = s1_idx + z_i;
         }
+
+        s2_idx = backward? s1_idx - z_i: s1_idx + z_i;
     } else {
         do {
             s2_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
