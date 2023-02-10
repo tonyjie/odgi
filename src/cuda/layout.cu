@@ -1,5 +1,6 @@
 #include "layout.h"
 #include <cuda.h>
+#include <assert.h>
 
 
 namespace cuda {
@@ -9,7 +10,43 @@ __global__ void cuda_device_init(curandState *rnd_state) {
     curand_init(42+tid, tid, 0, &rnd_state[threadIdx.x]);
 }
 
-__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double eta, cuda::node_data_t node_data,
+// TODO check for better zeta computation
+__device__ double compute_zeta(uint32_t n, double theta) {
+    double ans = 0.0;
+    for (uint32_t i = 1; i <= n; i++) {
+        ans += pow(1.0 / double(i), theta);
+    }
+    return ans;
+}
+
+// TODO remove a (always set to 1)
+// TODO change back to uint32_t return type
+__device__ uint64_t cuda_rnd_zipf(curandState *rnd_state, uint64_t a, uint64_t n, double theta, double zetan) {
+    // TODO Compute zetan on GPU (with exact pow, instead of dirtyzipfian pow)
+    double zeta2 = compute_zeta(2.0, theta);
+    double alpha = 1.0 / (1.0 - theta);
+    double eta = (1.0 - pow(2.0 / double(n - a + 1), 1.0 - theta)) / (1.0 - zeta2 / zetan);
+
+    double u = curand_uniform(rnd_state);
+    double uz = u * zetan;
+
+    int64_t val = 0;
+    if (uz < 1.0) val = a;
+    else if (uz < 1.0 + pow(0.5, theta)) val = a + 1;
+    else val = a + int64_t(double(n - a + 1) * pow(eta * u - eta + 1.0, alpha));
+
+    if (val > n) {
+        //printf("WARNING: val: %ld, n: %u\n", val, uint32_t(n));
+        // TODO Fix sometimes val == n+1
+        val--;
+    }
+    assert(val >= 0);
+    assert(val <= n);
+    return uint64_t(val);
+}
+
+
+__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double eta, double *zetas, cuda::node_data_t node_data,
         cuda::path_data_t path_data) { //, int *counter) {
     // TODO pipeline step kernel; get nodes and distance for next step (hide memory access time?)
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -33,14 +70,53 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     if (p.step_count < 2) {
         return;
     }
+    assert(p.step_count > 1);
 
     uint32_t s1_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
-
-    // TODO: implement cooling with zipf distribution
     uint32_t s2_idx;
-    do {
-        s2_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
-    } while (s1_idx == s2_idx);
+
+    // TODO improve branching: let entire warp / threadgroup decide on using zipf distribution
+    if (iter >= config.first_cooling_iteration || curand_uniform(rnd_state + threadIdx.x) <= 0.5) {
+        // TODO improve branching: combine backward / forward
+        if (s1_idx > 0 && (curand_uniform(rnd_state + threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
+            // go backward
+            uint64_t jump_space = min(config.space, uint64_t(s1_idx));
+            uint64_t space = jump_space;
+            if (jump_space > config.space_max) {
+                space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
+            }
+
+            uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], 1, jump_space, config.theta, zetas[space]);
+            if (!(z_i <= s1_idx)) {
+                printf("Error (thread %i): %u - %u\n", threadIdx.x, s1_idx, z_i);
+                printf("Jumpspace %ld, theta %f, zeta %f\n", int64_t(jump_space), config.theta, zetas[space]);
+            }
+            assert(z_i <= s1_idx);
+            s2_idx = s1_idx - z_i;
+        } else {
+            // go forward
+            uint64_t jump_space = min(config.space, uint64_t(p.step_count - s1_idx - 1));
+            uint64_t space = jump_space;
+            if (jump_space > config.space_max) {
+                space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
+            }
+
+            uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], 1, jump_space, config.theta, zetas[space]);
+            if (!(z_i <= p.step_count - s1_idx - 1)) {
+                printf("Error (thread %i): %u + %u, step_count %u\n", threadIdx.x, s1_idx, z_i, p.step_count);
+                printf("Jumpspace %ld, theta %f, zeta %f\n", int64_t(jump_space), config.theta, zetas[space]);
+            }
+            assert(s1_idx + z_i < p.step_count);
+            s2_idx = s1_idx + z_i;
+        }
+    } else {
+        do {
+            s2_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
+        } while (s1_idx == s2_idx);
+    }
+    assert(s1_idx < p.step_count);
+    assert(s2_idx < p.step_count);
+    assert(s1_idx != s2_idx);
 
     uint32_t n1_id = p.elements[s1_idx].node_id;
     int64_t n1_pos_in_path = p.elements[s1_idx].pos;
@@ -222,6 +298,10 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 two_step_gen = std::chrono::high_resolution_clock::now();
                 total_duration_two_step_gen += std::chrono::duration_cast<std::chrono::nanoseconds>(two_step_gen - one_step_gen);
 #endif
+                // TODO check if those asserts are triggered for CPU / dirtyzipfian distribution
+                assert(s1_idx < p.step_count);
+                assert(s2_idx < p.step_count);
+
                 uint32_t n1_id = p.elements[s1_idx].node_id;
                 int64_t n1_pos_in_path = p.elements[s1_idx].pos;
                 bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
@@ -371,6 +451,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "first_cooling_iteration: " << config.first_cooling_iteration << std::endl;
     std::cout << "min_term_updates: " << config.min_term_updates << std::endl;
     std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
+    std::cout << "theta: " << config.theta << std::endl;
 
     // create eta array
     double *etas;
@@ -403,7 +484,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaMallocManaged(&node_data.nodes, node_count * sizeof(cuda::node_t));
     // TODO parallelise with openmp
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        assert(graph.has_node(node_idx));
+        // TODO Check assert; why is it failing?
+        //assert(graph.has_node(node_idx));
         cuda::node_t *n_tmp = &node_data.nodes[node_idx];
 
         // sequence length
@@ -477,6 +559,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // cache zipf zetas
     double *zetas;
     uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
+    std::cout << "zetas_cnt: " << zetas_cnt << std::endl;
     cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
     uint64_t last_quantized_i = 0;
     // TODO parallelise with openmp?
@@ -504,11 +587,13 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 
     // TODO use different block_size and/or block_nbr when computing small pangenome to prevent NaN coordinates
-    const uint64_t block_size = 1024;
+    // TODO check reason for smaller block_size
+    const uint64_t block_size = 512; //1024;
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
     curandState *rnd_state;
     // TODO increase number of curandState objects; each thread in SM own curandState?
+    std::cout << "sizeof curandState: " << sizeof(curandState) << std::endl;
     cudaMallocManaged(&rnd_state, block_size * sizeof(curandState));
     cuda_device_init<<<1, block_size>>>(rnd_state);
 
@@ -519,7 +604,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     //*counter = 0;
 
     for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], node_data, path_data); //, counter);
+        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data); //, counter);
         cudaError_t error = cudaDeviceSynchronize();
         // TODO check for error
         std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
