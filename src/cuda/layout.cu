@@ -33,7 +33,8 @@ __device__ uint64_t cuda_rnd_zipf(curandState *rnd_state, uint64_t a, uint64_t n
     int64_t val = 0;
     if (uz < 1.0) val = a;
     else if (uz < 1.0 + pow(0.5, theta)) val = a + 1;
-    else val = a + int64_t(double(n - a + 1) * pow(eta * u - eta + 1.0, alpha));
+    // TODO remove strange workaround: float in double to prevent resource overload error
+    else val = a + int64_t(double(n - a + 1.0) * pow(eta * u - eta + 1.0, alpha));
 
     if (val > n) {
         //printf("WARNING: val: %ld, n: %u\n", val, uint32_t(n));
@@ -587,8 +588,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 
     // TODO use different block_size and/or block_nbr when computing small pangenome to prevent NaN coordinates
-    // TODO check reason for smaller block_size
-    const uint64_t block_size = 512; //1024;
+    const uint64_t block_size = 1024;
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
     curandState *rnd_state;
