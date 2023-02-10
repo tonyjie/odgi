@@ -20,8 +20,7 @@ __device__ double compute_zeta(uint32_t n, double theta) {
 }
 
 // TODO remove a (always set to 1)
-// TODO change back to uint32_t return type
-__device__ uint64_t cuda_rnd_zipf(curandState *rnd_state, uint64_t a, uint64_t n, double theta, double zetan) {
+__device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t a, uint32_t n, double theta, double zetan) {
     // TODO Compute zetan on GPU (with exact pow, instead of dirtyzipfian pow)
     double zeta2 = compute_zeta(2.0, theta);
     double alpha = 1.0 / (1.0 - theta);
@@ -43,7 +42,7 @@ __device__ uint64_t cuda_rnd_zipf(curandState *rnd_state, uint64_t a, uint64_t n
     }
     assert(val >= 0);
     assert(val <= n);
-    return uint64_t(val);
+    return uint32_t(val);
 }
 
 
@@ -81,8 +80,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         // TODO improve branching: combine backward / forward
         if (s1_idx > 0 && (curand_uniform(rnd_state + threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
             // go backward
-            uint64_t jump_space = min(config.space, uint64_t(s1_idx));
-            uint64_t space = jump_space;
+            uint32_t jump_space = min(config.space, s1_idx);
+            uint32_t space = jump_space;
             if (jump_space > config.space_max) {
                 space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
             }
@@ -90,14 +89,14 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
             uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], 1, jump_space, config.theta, zetas[space]);
             if (!(z_i <= s1_idx)) {
                 printf("Error (thread %i): %u - %u\n", threadIdx.x, s1_idx, z_i);
-                printf("Jumpspace %ld, theta %f, zeta %f\n", int64_t(jump_space), config.theta, zetas[space]);
+                printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, zetas[space]);
             }
             assert(z_i <= s1_idx);
             s2_idx = s1_idx - z_i;
         } else {
             // go forward
-            uint64_t jump_space = min(config.space, uint64_t(p.step_count - s1_idx - 1));
-            uint64_t space = jump_space;
+            uint32_t jump_space = min(config.space, p.step_count - s1_idx - 1);
+            uint32_t space = jump_space;
             if (jump_space > config.space_max) {
                 space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
             }
@@ -105,7 +104,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
             uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], 1, jump_space, config.theta, zetas[space]);
             if (!(z_i <= p.step_count - s1_idx - 1)) {
                 printf("Error (thread %i): %u + %u, step_count %u\n", threadIdx.x, s1_idx, z_i, p.step_count);
-                printf("Jumpspace %ld, theta %f, zeta %f\n", int64_t(jump_space), config.theta, zetas[space]);
+                printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, zetas[space]);
             }
             assert(s1_idx + z_i < p.step_count);
             s2_idx = s1_idx + z_i;
@@ -269,8 +268,8 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 if (iter + 1 >= config.first_cooling_iteration || flip(gen)) {
                     if (s1_idx > 0 && flip(gen) || s1_idx == p.step_count-1) {
                         // go backward
-                        uint64_t jump_space = std::min(config.space, (uint64_t) s1_idx);
-                        uint64_t space = jump_space;
+                        uint32_t jump_space = std::min(config.space, s1_idx);
+                        uint32_t space = jump_space;
                         if (jump_space > config.space_max) {
                             space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
                         }
@@ -280,8 +279,8 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                         s2_idx = s1_idx - z_i;
                     } else {
                         // go forward
-                        uint64_t jump_space = std::min(config.space, (uint64_t) (p.step_count - s1_idx - 1));
-                        uint64_t space = jump_space;
+                        uint32_t jump_space = std::min(config.space, p.step_count - s1_idx - 1);
+                        uint32_t space = jump_space;
                         if (jump_space > config.space_max) {
                             space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
                         }
@@ -559,6 +558,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     // cache zipf zetas
     double *zetas;
+    // TODO use uint32_t
     uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
     std::cout << "zetas_cnt: " << zetas_cnt << std::endl;
     cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));

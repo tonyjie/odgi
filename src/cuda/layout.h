@@ -57,9 +57,9 @@ struct layout_config_t {
     int32_t iter_with_max_learning_rate;
     uint32_t first_cooling_iteration;
     double theta;
-    uint64_t space;
-    uint64_t space_max;
-    uint64_t space_quantization_step;
+    uint32_t space;
+    uint32_t space_max;
+    uint32_t space_quantization_step;
     int nthreads;
 };
 
