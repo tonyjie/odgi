@@ -812,7 +812,8 @@ set(odgi_HEADERS
   ${CMAKE_SOURCE_DIR}/src/cuda/layout.h)
 
 target_include_directories(odgi_objs PUBLIC ${odgi_INCLUDES})
-target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp>)
+# arch and gencode are configured for our GPU (RTX A6000)
+target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp -arch=sm_86 -gencode=arch=compute_86,code=sm_86>)
 
 add_library(libodgi_static STATIC $<TARGET_OBJECTS:odgi_objs>)
 set_target_properties(libodgi_static PROPERTIES OUTPUT_NAME "odgi")
