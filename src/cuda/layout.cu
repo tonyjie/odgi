@@ -10,7 +10,6 @@ __global__ void cuda_device_init(curandState *rnd_state) {
     curand_init(42+tid, tid, 0, &rnd_state[threadIdx.x]);
 }
 
-// TODO check for better zeta computation
 __device__ double compute_zeta(uint32_t n, double theta) {
     double ans = 0.0;
     for (uint32_t i = 1; i <= n; i++) {
@@ -19,9 +18,8 @@ __device__ double compute_zeta(uint32_t n, double theta) {
     return ans;
 }
 
-__device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t n, double theta, double zetan) {
+__device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t n, double theta, double zeta2, double zetan) {
     // TODO Compute zetan on GPU (with exact pow, instead of dirtyzipfian pow)
-    double zeta2 = compute_zeta(2.0, theta);
     double alpha = 1.0 / (1.0 - theta);
     double eta = (1.0 - pow(2.0 / double(n), 1.0 - theta)) / (1.0 - zeta2 / zetan);
 
@@ -91,7 +89,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
             space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
         }
 
-        uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], jump_space, config.theta, zetas[space]);
+        uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], jump_space, config.theta, zetas[2], zetas[space]);
 
         if (backward) {
             if (!(z_i <= s1_idx)) {
@@ -558,8 +556,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // cache zipf zetas
     double *zetas;
     // TODO use uint32_t
+    // TODO move to GPU
     uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
     std::cout << "zetas_cnt: " << zetas_cnt << std::endl;
+    std::cout << "space_max: " << config.space_max << std::endl;
     cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
     uint64_t last_quantized_i = 0;
     // TODO parallelise with openmp?
