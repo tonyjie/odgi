@@ -468,9 +468,9 @@ namespace odgi {
             config.iter_with_max_learning_rate = (int32_t)  iter_with_max_learning_rate;
             config.first_cooling_iteration = std::floor(cooling_start * (double)iter_max);
             config.theta = theta;
-            config.space = space;
-            config.space_max = space_max;
-            config.space_quantization_step = space_quantization_step;
+            config.space = uint32_t(space);
+            config.space_max = uint32_t(space_max);
+            config.space_quantization_step = uint32_t(space_quantization_step);
             config.nthreads = nthreads;
 
             cuda::cuda_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y);
