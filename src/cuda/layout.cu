@@ -71,8 +71,14 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     uint32_t s1_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
     uint32_t s2_idx;
 
-    // TODO improve branching: let entire warp / threadgroup decide on using zipf distribution
-    if (iter >= config.first_cooling_iteration || curand_uniform(rnd_state + threadIdx.x) <= 0.5) {
+
+    __shared__ bool cooling;
+    if (tid % 32 == 0) {
+        cooling = (iter >= config.first_cooling_iteration) || (curand_uniform(rnd_state + threadIdx.x) <= 0.5);
+    }
+    __syncwarp();
+
+    if (cooling) {
         bool backward;
         uint32_t jump_space;
         if (s1_idx > 0 && (curand_uniform(rnd_state + threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
@@ -114,6 +120,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(s1_idx < p.step_count);
     assert(s2_idx < p.step_count);
     assert(s1_idx != s2_idx);
+
 
     uint32_t n1_id = p.elements[s1_idx].node_id;
     int64_t n1_pos_in_path = p.elements[s1_idx].pos;
