@@ -18,18 +18,18 @@ __device__ double compute_zeta(uint32_t n, double theta) {
     return ans;
 }
 
+// this function uses the cuda operation __powf, which is a faster but less precise alternative to the pow operation
 __device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t n, double theta, double zeta2, double zetan) {
-    // TODO Compute zetan on GPU (with exact pow, instead of dirtyzipfian pow)
     double alpha = 1.0 / (1.0 - theta);
-    double eta = (1.0 - pow(2.0 / double(n), 1.0 - theta)) / (1.0 - zeta2 / zetan);
+    double eta = (1.0 - __powf(2.0 / double(n), 1.0 - theta)) / (1.0 - zeta2 / zetan);
 
     double u = curand_uniform(rnd_state);
     double uz = u * zetan;
 
     int64_t val = 0;
     if (uz < 1.0) val = 1;
-    else if (uz < 1.0 + pow(0.5, theta)) val = 2;
-    else val = 1 + int64_t(double(n) * pow(eta * u - eta + 1.0, alpha));
+    else if (uz < 1.0 + __powf(0.5, theta)) val = 2;
+    else val = 1 + int64_t(double(n) * __powf(eta * u - eta + 1.0, alpha));
 
     if (val > n) {
         //printf("WARNING: val: %ld, n: %u\n", val, uint32_t(n));
