@@ -656,6 +656,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
 
     // get rid of CUDA data structures
+    cudaFree(etas);
     cudaFree(node_data.nodes);
     for (int i = 0; i < path_count; i++) {
         cudaFree(path_data.paths[i].elements);
