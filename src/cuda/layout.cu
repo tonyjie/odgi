@@ -560,42 +560,14 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     }
 
 
-    auto start_zeta = std::chrono::high_resolution_clock::now();
     // cache zipf zetas
+    auto start_zeta = std::chrono::high_resolution_clock::now();
     double *zetas;
-    // TODO use uint32_t
-    // TODO move to GPU
     uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
     std::cout << "zetas_cnt: " << zetas_cnt << std::endl;
     std::cout << "space_max: " << config.space_max << std::endl;
     std::cout << "config.space: " << config.space << std::endl;
     std::cout << "config.space_quantization: " << config.space_quantization_step << std::endl;
-
-    /*
-    // reference previous implementation
-    double *zetas_ref = (double*) malloc(zetas_cnt * sizeof(double));
-    uint64_t last_quantized_i = 0;
-    // TODO parallelise with openmp?
-#pragma omp parallel for schedule(static,1)
-    for (uint64_t i = 1; i < config.space + 1; i++) {
-        uint64_t quantized_i = i;
-        uint64_t compressed_space = i;
-        if (i > config.space_max) {
-            quantized_i = config.space_max + (i - config.space_max) / config.space_quantization_step + 1;
-            compressed_space = config.space_max + ((i - config.space_max) / config.space_quantization_step) * config.space_quantization_step;
-        }
-
-        if (quantized_i != last_quantized_i) {
-            if (compressed_space > 999 && compressed_space < 2000) {
-                std::string tmp = "i: " + std::to_string(i) + " compressed_space: " + std::to_string(compressed_space) + "\n";
-                std::cout << tmp;
-            }
-            dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, compressed_space, config.theta);
-            zetas_ref[quantized_i] = z_p.zeta();
-            last_quantized_i = quantized_i;
-        }
-    }
-    */
 
     cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
     double zeta_tmp = 0.0;
@@ -611,19 +583,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto end_zeta = std::chrono::high_resolution_clock::now();
     uint32_t duration_zeta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_zeta - start_zeta).count();
     std::cout << "Zeta precompute took " << duration_zeta_ms << "ms" << std::endl;
-    /*
-    for (int i = 1; i < zetas_cnt; i++) {
-        if (i > 20000 && i < 21000) {
-            std::string tmp = std::to_string(zetas_ref[i]) + " vs. " + std::to_string(zetas[i]) + "\n";
-            std::cout << tmp;
-        }
-        if (zetas_ref[i] != zetas[i]) {
-            std::cout << "WARNING[" << i << "]: " << zetas_ref[i] << " != " << zetas[i] << std::endl;
-        }
-        //assert(zetas_ref[i] == zetas[i]);
-    }
-    */
-
 
 
     auto start_compute = std::chrono::high_resolution_clock::now();
