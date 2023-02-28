@@ -598,18 +598,14 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     */
 
     cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
-    // TODO parallelise with openmp?
-#pragma omp parallel for num_threads(config.nthreads)
-    for (uint64_t i = 1; i < zetas_cnt; i++) {
+    double zeta_tmp = 0.0;
+    for (uint64_t i = 1; i < config.space + 1; i++) {
+        zeta_tmp += dirtyzipf::fast_precise_pow(1.0 / i, config.theta);
         if (i <= config.space_max) {
-            dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, i, config.theta);
-            zetas[i] = z_p.zeta();
-        } else {
-            //uint64_t unquantized_i = (i - config.space_max - 1) * config.space_quantization_step + config.space_max + 1;
-            //uint64_t compressed_space = config.space_max + ((unquantized - config.space_max) / config.space_quantization_step) * config.space_quantization_step;
-            uint64_t compressed_space = config.space_max + (i - config.space_max - 1) * config.space_quantization_step;
-            dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, compressed_space, config.theta);
-            zetas[i] = z_p.zeta();
+            zetas[i] = zeta_tmp;
+        }
+        if (i >= config.space_max && (i - config.space_max) % config.space_quantization_step == 0) {
+            zetas[config.space_max + 1 + (i - config.space_max) / config.space_quantization_step] = zeta_tmp;
         }
     }
     auto end_zeta = std::chrono::high_resolution_clock::now();
