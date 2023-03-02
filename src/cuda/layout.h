@@ -38,12 +38,13 @@ struct path_element_t {
 
 struct path_t {
     uint32_t step_count;
+    uint64_t first_step_in_path;  // precomputed position in path
     path_element_t *elements;
 };
 
 struct path_data_t {
     uint32_t path_count;
-    uint64_t total_path_steps;
+    uint32_t total_path_steps;
     path_t *paths;
 };
 
