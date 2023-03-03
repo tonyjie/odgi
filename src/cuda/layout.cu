@@ -62,11 +62,14 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     __syncthreads();
     // find path of first step
     // TODO parallelize
-    if (threadIdx.x % 32 == 0 && !first_step_path_idx_found) {
-        for (int pidx = 0; pidx < path_data.path_count; pidx++) {
+    if (!first_step_path_idx_found) {
+        for (int pidx = threadIdx.x % 32; pidx < path_data.path_count; pidx += 32) {
             if (first_step_idx >= path_data.paths[pidx].first_step_in_path && first_step_idx < path_data.paths[pidx].first_step_in_path + path_data.paths[pidx].step_count) {
                 first_step_path_idx = pidx;
                 first_step_path_idx_found = true;
+                break;
+            }
+            if (first_step_path_idx_found) {
                 break;
             }
         }
