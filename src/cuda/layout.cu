@@ -21,7 +21,11 @@ __device__ double compute_zeta(uint32_t n, double theta) {
 // this function uses the cuda operation __powf, which is a faster but less precise alternative to the pow operation
 __device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t n, double theta, double zeta2, double zetan) {
     double alpha = 1.0 / (1.0 - theta);
-    double eta = (1.0 - __powf(2.0 / double(n), 1.0 - theta)) / (1.0 - zeta2 / zetan);
+    double denominator = 1.0 - zeta2 / zetan;
+    if (denominator == 0.0) {
+        denominator = 1e-9;
+    }
+    double eta = (1.0 - __powf(2.0 / double(n), 1.0 - theta)) / (denominator);
 
     double u = curand_uniform(rnd_state);
     double uz = u * zetan;
