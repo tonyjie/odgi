@@ -21,9 +21,10 @@
 namespace cuda {
 
 
-struct node_t {
-    int32_t seq_length;
+struct __align__(8) node_t {
     float coords[4];
+    // TODO move half of coordinates in front and other behind
+    int32_t seq_length;
 };
 struct node_data_t {
     uint32_t node_count;
@@ -31,7 +32,7 @@ struct node_data_t {
 };
 
 
-struct path_element_t {
+struct __align__(8) path_element_t {
     uint32_t node_id;
     int64_t pos;    // if position negative: reverse orientation
 };

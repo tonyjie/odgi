@@ -204,10 +204,10 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
     float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
     float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
-    double x1_val = double(atomicAdd(x1, 0.0));
-    double x2_val = double(atomicAdd(x2, 0.0));
-    double y1_val = double(atomicAdd(y1, 0.0));
-    double y2_val = double(atomicAdd(y2, 0.0));
+    double x1_val = double(*x1);
+    double x2_val = double(*x2);
+    double y1_val = double(*y1);
+    double y2_val = double(*y2);
 
     double dx = x1_val - x2_val;
     double dy = y1_val - y2_val;
