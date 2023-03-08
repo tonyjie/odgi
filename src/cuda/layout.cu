@@ -120,7 +120,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         s2_idx = backward? s1_idx - z_i: s1_idx + z_i;
     } else {
         do {
-            s2_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
+            s2_idx = uint32_t(floor((1.0 - curand_uniform(rnd_state + threadIdx.x)) * float(p.step_count)));
         } while (s1_idx == s2_idx);
     }
     assert(s1_idx < p.step_count);
