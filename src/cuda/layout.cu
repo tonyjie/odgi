@@ -57,16 +57,16 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
 
     // select path
-    __shared__ uint32_t first_step_idx;
+    __shared__ uint32_t first_step_idx[32];
     // TODO use less shared memory
-    if (threadIdx.x == 0) {
-        first_step_idx = (uint32_t)(ceil(curand_uniform(rnd_state + threadIdx.x) * (path_data.total_path_steps + 1.0)));
+    if (threadIdx.x % 32 == 0) {
+        first_step_idx[threadIdx.x / 32] = (uint32_t)(ceil(curand_uniform(rnd_state + threadIdx.x) * (path_data.total_path_steps + 1.0)));
         assert(first_step_idx < path_data.total_path_steps);
     }
-    __syncthreads();
+    __syncwarp();
 
     // find path of step of specific thread with LUT
-    uint32_t step_idx = (first_step_idx + threadIdx.x) % path_data.total_path_steps;
+    uint32_t step_idx = (first_step_idx[threadIdx.x / 32] + threadIdx.x % 32) % path_data.total_path_steps;
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
 
 
