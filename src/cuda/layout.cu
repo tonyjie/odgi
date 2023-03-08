@@ -51,55 +51,22 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     // TODO pipeline step kernel; get nodes and distance for next step (hide memory access time?)
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // TODO improve discrete distribution selection
     // select path
-    // generate first step
     __shared__ uint32_t first_step_idx;
-    __shared__ uint32_t first_step_path_idx;
-    __shared__ bool first_step_path_idx_found;
     // TODO use less shared memory
     if (threadIdx.x == 0) {
         first_step_idx = (uint32_t)(ceil(curand_uniform(rnd_state + threadIdx.x) * (path_data.total_path_steps + 1.0)));
-        first_step_path_idx_found = false;
         assert(first_step_idx < path_data.total_path_steps);
     }
     __syncthreads();
-    // find path of first step
-    // TODO parallelize
-    if (!first_step_path_idx_found) {
-        for (int pidx = threadIdx.x % 32; pidx < path_data.path_count; pidx += 32) {
-            if (first_step_idx >= path_data.paths[pidx].first_step_in_path && first_step_idx < path_data.paths[pidx].first_step_in_path + path_data.paths[pidx].step_count) {
-                first_step_path_idx = pidx;
-                first_step_path_idx_found = true;
-                break;
-            }
-            if (first_step_path_idx_found) {
-                break;
-            }
-        }
-    }
     __shared__ bool cooling;
     if (tid % 32 == 0) {
         cooling = (iter >= config.first_cooling_iteration) || (curand_uniform(rnd_state + threadIdx.x) <= 0.5);
     }
     __syncwarp();
-    assert(first_step_path_idx_found == true);
     // find path of step of specific thread
     uint32_t step_idx = (first_step_idx + threadIdx.x) % path_data.total_path_steps;
-    uint32_t path_idx;
-    bool path_idx_found = false;
-    for (int i = 0; i < path_data.path_count; i++) {
-        int pidx = (i + first_step_path_idx) % path_data.path_count;
-        if (step_idx >= path_data.paths[pidx].first_step_in_path && step_idx < path_data.paths[pidx].first_step_in_path + path_data.paths[pidx].step_count) {
-            path_idx = pidx;
-            path_idx_found = true;
-            break;
-        }
-    }
-    assert(path_idx_found == true);
-    if (threadIdx.x % 32 == 31) {
-        first_step_path_idx = path_idx;
-    }
+    uint32_t path_idx = path_data.element_array[step_idx].pidx;
 
     path_t p = path_data.paths[path_idx];
     if (p.step_count < 2) {
