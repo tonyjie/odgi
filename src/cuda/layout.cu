@@ -27,7 +27,8 @@ __device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t n, double the
     }
     double eta = (1.0 - __powf(2.0 / double(n), 1.0 - theta)) / (denominator);
 
-    double u = curand_uniform(rnd_state);
+    // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
+    double u = 1.0 - curand_uniform(rnd_state);
     double uz = u * zetan;
 
     int64_t val = 0;
@@ -40,6 +41,7 @@ __device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t n, double the
         // TODO Fix sometimes val == n+1
         val--;
     }
+    // TODO should value be >= 1?
     assert(val >= 0);
     assert(val <= n);
     return uint32_t(val);
@@ -60,8 +62,9 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     __shared__ uint32_t first_step_idx[32];
     // TODO use less shared memory
     if (threadIdx.x % 32 == 0) {
-        first_step_idx[threadIdx.x / 32] = (uint32_t)(ceil(curand_uniform(rnd_state + threadIdx.x) * (path_data.total_path_steps + 1.0)));
-        assert(first_step_idx < path_data.total_path_steps);
+        // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
+        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform(rnd_state + threadIdx.x)) * float(path_data.total_path_steps)));
+        assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
     }
     __syncwarp();
 
@@ -76,7 +79,9 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
     assert(p.step_count > 1);
 
-    uint32_t s1_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
+    // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
+    uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform(rnd_state + threadIdx.x)) * float(p.step_count)));
+    assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
     if (cooling[threadIdx.x / 32]) {
@@ -522,6 +527,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         });
     cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
 
+    // get length and starting position of all paths
     uint32_t first_step_counter = 0;
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
         odgi::path_handle_t p = path_handles[path_idx];
