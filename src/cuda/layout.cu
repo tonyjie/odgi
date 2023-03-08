@@ -51,6 +51,11 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     // TODO pipeline step kernel; get nodes and distance for next step (hide memory access time?)
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
 
+    __shared__ bool cooling[32];
+    if (threadIdx.x % 32 == 1) {
+        cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand_uniform(rnd_state + threadIdx.x) <= 0.5);
+    }
+
     // select path
     __shared__ uint32_t first_step_idx;
     // TODO use less shared memory
@@ -59,14 +64,11 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         assert(first_step_idx < path_data.total_path_steps);
     }
     __syncthreads();
-    __shared__ bool cooling;
-    if (tid % 32 == 0) {
-        cooling = (iter >= config.first_cooling_iteration) || (curand_uniform(rnd_state + threadIdx.x) <= 0.5);
-    }
-    __syncwarp();
-    // find path of step of specific thread
+
+    // find path of step of specific thread with LUT
     uint32_t step_idx = (first_step_idx + threadIdx.x) % path_data.total_path_steps;
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
+
 
     path_t p = path_data.paths[path_idx];
     if (p.step_count < 2) {
@@ -77,7 +79,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     uint32_t s1_idx = (uint32_t)(ceil((curand_uniform(rnd_state + threadIdx.x)*float(p.step_count))) - 1.0);
     uint32_t s2_idx;
 
-    if (cooling) {
+    if (cooling[threadIdx.x / 32]) {
         bool backward;
         uint32_t jump_space;
         if (s1_idx > 0 && (curand_uniform(rnd_state + threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
