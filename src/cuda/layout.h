@@ -33,6 +33,7 @@ struct node_data_t {
 
 
 struct __align__(8) path_element_t {
+    uint32_t pidx;
     uint32_t node_id;
     int64_t pos;    // if position negative: reverse orientation
 };
@@ -47,6 +48,7 @@ struct path_data_t {
     uint32_t path_count;
     uint32_t total_path_steps;
     path_t *paths;
+    path_element_t *element_array;
 };
 
 
