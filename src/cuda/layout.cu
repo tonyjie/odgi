@@ -551,6 +551,16 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             path_handles.push_back(p);
             path_data.total_path_steps += graph.get_step_count(p);
         });
+    cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
+
+    uint32_t first_step_counter = 0;
+    for (int path_idx = 0; path_idx < path_count; path_idx++) {
+        odgi::path_handle_t p = path_handles[path_idx];
+        int step_count = graph.get_step_count(p);
+        path_data.paths[path_idx].step_count = step_count;
+        path_data.paths[path_idx].first_step_in_path = first_step_counter;
+        first_step_counter += step_count;
+    }
 
 #pragma omp parallel for num_threads(config.nthreads)
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
@@ -558,43 +568,46 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         odgi::path_handle_t p = path_handles[path_idx];
         //std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
 
-        int step_count = graph.get_step_count(p);
-        path_data.paths[path_idx].step_count = step_count;
-        path_data.paths[path_idx].first_step_in_path = 0;
+        uint32_t step_count = path_data.paths[path_idx].step_count;
+        uint32_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
+        if (step_count == 0) {
+            path_data.paths[path_idx].elements = NULL;
+        } else {
+            path_element_t *cur_path = &path_data.element_array[first_step_in_path];
+            path_data.paths[path_idx].elements = cur_path;
 
-        cuda::path_element_t *cur_path;
-        cudaMallocManaged(&cur_path, step_count * sizeof(path_element_t));
-        path_data.paths[path_idx].elements = cur_path;
+            odgi::step_handle_t s = graph.path_begin(p);
+            int64_t pos = 1;
+            // Iterate through path
+            for (int step_idx = 0; step_idx < step_count; step_idx++) {
+                odgi::handle_t h = graph.get_handle_of_step(s);
+                //std::cout << graph.get_id(h) << std::endl;
 
-        odgi::step_handle_t s = graph.path_begin(p);
-        int64_t pos = 1;
-        // Iterate through path
-        for (int step_idx = 0; step_idx < step_count; step_idx++) {
-            odgi::handle_t h = graph.get_handle_of_step(s);
-            //std::cout << graph.get_id(h) << std::endl;
+                cur_path[step_idx].node_id = graph.get_id(h) - 1;
+                cur_path[step_idx].pidx = uint32_t(path_idx);
+                // store position negative when handle reverse
+                if (graph.get_is_reverse(h)) {
+                    cur_path[step_idx].pos = -pos;
+                } else {
+                    cur_path[step_idx].pos = pos;
+                }
+                pos += graph.get_length(h);
 
-            cur_path[step_idx].node_id = graph.get_id(h) - 1;
-            // store position negative when handle reverse
-            if (graph.get_is_reverse(h)) {
-                cur_path[step_idx].pos = -pos;
-            } else {
-                cur_path[step_idx].pos = pos;
-            }
-            pos += graph.get_length(h);
-
-            // get next step
-            if (graph.has_next_step(s)) {
-                s = graph.get_next_step(s);
-            } else if (!(step_idx == step_count-1)) {
-                // should never be reached
-                std::cout << "Error: Here should be another step" << std::endl;
+                // get next step
+                if (graph.has_next_step(s)) {
+                    s = graph.get_next_step(s);
+                } else if (!(step_idx == step_count-1)) {
+                    // should never be reached
+                    std::cout << "Error: Here should be another step" << std::endl;
+                }
             }
         }
     }
+    // TODO remove
     // precompute rank of first step of each path to ease later parallelisation
     uint32_t step_counter = 0;
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        path_data.paths[path_idx].first_step_in_path = step_counter;
+        assert(path_data.paths[path_idx].first_step_in_path == step_counter);
         step_counter += path_data.paths[path_idx].step_count;
     }
 
@@ -695,10 +708,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // get rid of CUDA data structures
     cudaFree(etas);
     cudaFree(node_data.nodes);
-    for (int i = 0; i < path_count; i++) {
-        cudaFree(path_data.paths[i].elements);
-    }
     cudaFree(path_data.paths);
+    cudaFree(path_data.element_array);
     cudaFree(zetas);
 #ifdef USE_GPU
     cudaFree(rnd_state);
