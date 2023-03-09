@@ -7,7 +7,7 @@ namespace cuda {
 
 __global__ void cuda_device_init(curandState *rnd_state) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    curand_init(42+tid, tid, 0, &rnd_state[threadIdx.x]);
+    curand_init(42+tid, tid, 0, &rnd_state[tid]);
 }
 
 __device__ double compute_zeta(uint32_t n, double theta) {
@@ -48,14 +48,23 @@ __device__ uint32_t cuda_rnd_zipf(curandState *rnd_state, uint32_t n, double the
 }
 
 
+static __device__ __inline__ uint32_t __mysmid(){
+    uint32_t smid;
+    asm volatile("mov.u32 %0, %%smid;" : "=r"(smid));
+    return smid;
+}
+
 __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double eta, double *zetas, cuda::node_data_t node_data,
         cuda::path_data_t path_data) { //, int *counter) {
     // TODO pipeline step kernel; get nodes and distance for next step (hide memory access time?)
-    int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t smid = __mysmid();
+    assert(smid < 84);
+    curandState *thread_rnd_state = &rnd_state[smid * 1024 + threadIdx.x];
 
     __shared__ bool cooling[32];
     if (threadIdx.x % 32 == 1) {
-        cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand_uniform(rnd_state + threadIdx.x) <= 0.5);
+        cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) <= 0.5);
     }
 
     // select path
@@ -63,7 +72,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     // TODO use less shared memory
     if (threadIdx.x % 32 == 0) {
         // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform(rnd_state + threadIdx.x)) * float(path_data.total_path_steps)));
+        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(path_data.total_path_steps)));
         assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
     }
     __syncwarp();
@@ -80,14 +89,14 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(p.step_count > 1);
 
     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform(rnd_state + threadIdx.x)) * float(p.step_count)));
+    uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(p.step_count)));
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
     if (cooling[threadIdx.x / 32]) {
         bool backward;
         uint32_t jump_space;
-        if (s1_idx > 0 && (curand_uniform(rnd_state + threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
+        if (s1_idx > 0 && (curand_uniform(thread_rnd_state) <= 0.5) || s1_idx == p.step_count-1) {
             // go backward
             backward = true;
             jump_space = min(config.space, s1_idx);
@@ -101,7 +110,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
             space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
         }
 
-        uint32_t z_i = cuda_rnd_zipf(&rnd_state[threadIdx.x], jump_space, config.theta, zetas[2], zetas[space]);
+        uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
 
         if (backward) {
             if (!(z_i <= s1_idx)) {
@@ -120,7 +129,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         s2_idx = backward? s1_idx - z_i: s1_idx + z_i;
     } else {
         do {
-            s2_idx = uint32_t(floor((1.0 - curand_uniform(rnd_state + threadIdx.x)) * float(p.step_count)));
+            s2_idx = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(p.step_count)));
         } while (s1_idx == s2_idx);
     }
     assert(s1_idx < p.step_count);
@@ -139,7 +148,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     n2_pos_in_path = std::abs(n2_pos_in_path);
 
     uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
-    bool n1_use_other_end = (curand_uniform(rnd_state + threadIdx.x) <= 0.5)? true: false;
+    bool n1_use_other_end = (curand_uniform(thread_rnd_state) <= 0.5)? true: false;
     if (n1_use_other_end) {
         n1_pos_in_path += uint64_t{n1_seq_length};
         n1_use_other_end = !n1_is_rev;
@@ -148,7 +157,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
 
     uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
-    bool n2_use_other_end = (curand_uniform(rnd_state + threadIdx.x) <= 0.5)? true: false;
+    bool n2_use_other_end = (curand_uniform(thread_rnd_state) <= 0.5)? true: false;
     if (n2_use_other_end) {
         n2_pos_in_path += uint64_t{n2_seq_length};
         n2_use_other_end = !n2_is_rev;
@@ -625,8 +634,11 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     curandState *rnd_state;
     // TODO increase number of curandState objects; each thread in SM own curandState?
     std::cout << "sizeof curandState: " << sizeof(curandState) << std::endl;
-    cudaMallocManaged(&rnd_state, block_size * sizeof(curandState));
-    cuda_device_init<<<1, block_size>>>(rnd_state);
+    cudaError_t tmp_error = cudaMallocManaged(&rnd_state, 168 * block_size * sizeof(curandState));
+    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    cuda_device_init<<<168, block_size>>>(rnd_state);
+    tmp_error = cudaDeviceSynchronize();
+    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
 
     // TODO remove counter
     //int *counter;
