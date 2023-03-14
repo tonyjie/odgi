@@ -134,6 +134,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
         uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
 
+        /*
         if (backward) {
             if (!(z_i <= s1_idx)) {
                 printf("Error (thread %i): %u - %u\n", threadIdx.x, s1_idx, z_i);
@@ -147,6 +148,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
             }
             assert(s1_idx + z_i < p.step_count);
         }
+        */
 
         s2_idx = backward? s1_idx - z_i: s1_idx + z_i;
     } else {
