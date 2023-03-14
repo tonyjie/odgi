@@ -695,29 +695,19 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     // copy coords back to X, Y vectors
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        cuda::node_t *n = &node_data.nodes[node_idx];
-
+        cuda::node_t *n = &(node_data.nodes[node_idx]);
+        // coords[0], coords[1], coords[2], coords[3] are stored consecutively. 
+        float *coords = n->coords;
+        // check if coordinates valid (not NaN or infinite)
         for (int i = 0; i < 4; i++) {
-            float coord = n->coords[i];
-            if (!isfinite(coord)) {
+            if (!isfinite(coords[i])) {
                 std::cout << "WARNING: invalid coordiate" << std::endl;
-                coord = 0.0;
-            }
-            switch (i) {
-                case 0:
-                    X[node_idx * 2].store(double(coord));
-                    break;
-                case 1:
-                    Y[node_idx * 2].store(double(coord));
-                    break;
-                case 2:
-                    X[node_idx * 2 + 1].store(double(coord));
-                    break;
-                case 3:
-                    Y[node_idx * 2 + 1].store(double(coord));
-                    break;
             }
         }
+        X[node_idx * 2].store(double(coords[0]));
+        Y[node_idx * 2].store(double(coords[1]));
+        X[node_idx * 2 + 1].store(double(coords[2]));
+        Y[node_idx * 2 + 1].store(double(coords[3]));
         //std::cout << "coords of " << node_idx << ": [" << X[node_idx*2] << "; " << Y[node_idx*2] << "] ; [" << X[node_idx*2+1] << "; " << Y[node_idx*2+1] <<"]\n";
     }
 
