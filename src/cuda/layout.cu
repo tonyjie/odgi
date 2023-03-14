@@ -59,11 +59,6 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(smid < 84);
     curandState *thread_rnd_state = &rnd_state[smid * 1024 + threadIdx.x];
 
-    __shared__ bool cooling[32];
-    if (threadIdx.x % 32 == 1) {
-        cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) <= 0.5);
-    }
-
     // select path
     __shared__ uint32_t first_step_idx[32];
     if (threadIdx.x % 32 == 0) {
@@ -89,7 +84,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
-    if (cooling[threadIdx.x / 32]) {
+    bool cooling = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) <= 0.5);
+    if (cooling) {
         bool backward;
         uint32_t jump_space;
         if (s1_idx > 0 && (curand_uniform(thread_rnd_state) <= 0.5) || s1_idx == p.step_count-1) {
