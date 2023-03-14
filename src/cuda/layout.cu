@@ -19,7 +19,6 @@ __global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoales
 }
 
 
-// TODO: necessary to send thread_id as argument, or does threadIdx.x work here as well?
 __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
     // generate 32 bit pseudorandom value with XORWOW generator; see curand function in curand_kernel.h
     uint32_t t;
@@ -65,10 +64,8 @@ __device__ uint32_t cuda_rnd_zipf(curandStateCoalesced_t *rnd_state, uint32_t n,
 
     if (val > n) {
         //printf("WARNING: val: %ld, n: %u\n", val, uint32_t(n));
-        // TODO Fix sometimes val == n+1
         val--;
     }
-    // TODO should value be >= 1?
     assert(val >= 0);
     assert(val <= n);
     return uint32_t(val);
@@ -82,8 +79,7 @@ static __device__ __inline__ uint32_t __mysmid(){
 }
 
 __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, cuda::node_data_t node_data,
-        cuda::path_data_t path_data) { //, int *counter) {
-    // TODO pipeline step kernel; get nodes and distance for next step (hide memory access time?)
+        cuda::path_data_t path_data) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
     assert(smid < 84);
@@ -96,7 +92,6 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     // select path
     __shared__ uint32_t first_step_idx[32];
-    // TODO use less shared memory
     if (threadIdx.x % 32 == 0) {
         // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
         first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
@@ -230,16 +225,13 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     double delta = mu * (mag - d_ij) / 2.0;
     //double delta_abs = std::abs(delta);
 
-    // TODO implement delta max stop functionality
     double r = delta / mag;
     double r_x = r * dx;
     double r_y = r * dy;
-    // TODO check current value before updating
     atomicExch(x1, float(x1_val - r_x));
     atomicExch(x2, float(x2_val + r_x));
     atomicExch(y1, float(y1_val - r_y));
     atomicExch(y2, float(y2_val + r_y));
-    //atomicAdd(counter, 1);
 }
 
 
@@ -344,7 +336,6 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 two_step_gen = std::chrono::high_resolution_clock::now();
                 total_duration_two_step_gen += std::chrono::duration_cast<std::chrono::nanoseconds>(two_step_gen - one_step_gen);
 #endif
-                // TODO check if those asserts are triggered for CPU / dirtyzipfian distribution
                 assert(s1_idx < p.step_count);
                 assert(s2_idx < p.step_count);
 
@@ -425,7 +416,6 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 double delta = mu * (mag - d_ij) / 2.0;
                 //double delta_abs = std::abs(delta);
 
-                // TODO implement delta max stop functionality
                 double r = delta / mag;
                 double r_x = r * dx;
                 double r_y = r * dy;
@@ -520,7 +510,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // consisting of sequence length and coords
     uint32_t node_count = graph.get_node_count();
     std::cout << "node_count: " << node_count << std::endl;
-    // TODO handle cases when min_node_id != 1
     assert(graph.min_node_id() == 1);
     assert(graph.max_node_id() == node_count);
     assert(graph.max_node_id() - graph.min_node_id() + 1 == node_count);
@@ -528,9 +517,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cuda::node_data_t node_data;
     node_data.node_count = node_count;
     cudaMallocManaged(&node_data.nodes, node_count * sizeof(cuda::node_t));
-    // TODO parallelise with openmp
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        // TODO Check assert; why is it failing?
         //assert(graph.has_node(node_idx));
         cuda::node_t *n_tmp = &node_data.nodes[node_idx];
 
@@ -575,7 +562,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
 #pragma omp parallel for num_threads(config.nthreads)
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        // TODO: sort paths for uniform distribution? Largest should not just be next to each other
         odgi::path_handle_t p = path_handles[path_idx];
         //std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
 
@@ -614,13 +600,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             }
         }
     }
-    // TODO remove
-    // precompute rank of first step of each path to ease later parallelisation
-    uint32_t step_counter = 0;
-    for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        assert(path_data.paths[path_idx].first_step_in_path == step_counter);
-        step_counter += path_data.paths[path_idx].step_count;
-    }
 
 
     // cache zipf zetas
@@ -654,7 +633,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "cuda gpu layout" << std::endl;
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 
-    // TODO use different block_size and/or block_nbr when computing small pangenome to prevent NaN coordinates
     const uint64_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
@@ -670,20 +648,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaFree(rnd_state_tmp);
 
 
-    // TODO remove counter
-    //int *counter;
-    //error = cudaMallocManaged(&counter, sizeof(int));
-    //std::cout << "[6] CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
-    //*counter = 0;
-
     for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data); //, counter);
+        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
         cudaError_t error = cudaDeviceSynchronize();
-        // TODO check for error
         std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
 
-    //std::cout << "thread counter: " << *counter << std::endl;
 #else
     cpu_layout(config, etas, zetas, node_data, path_data);
 #endif
@@ -720,7 +690,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaFree(zetas);
 #ifdef USE_GPU
     cudaFree(rnd_state);
-    //cudaFree(counter);
 #endif
 
 
