@@ -614,9 +614,9 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
     curandState *rnd_state;
     std::cout << "sizeof curandState: " << sizeof(curandState) << std::endl;
-    cudaError_t tmp_error = cudaMallocManaged(&rnd_state, 168 * block_size * sizeof(curandState));
+    cudaError_t tmp_error = cudaMallocManaged(&rnd_state, 84 * block_size * sizeof(curandState));
     std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    cuda_device_init<<<168, block_size>>>(rnd_state);
+    cuda_device_init<<<84, block_size>>>(rnd_state);
     tmp_error = cudaDeviceSynchronize();
     std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
 
