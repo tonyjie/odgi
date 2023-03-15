@@ -53,7 +53,7 @@ static __device__ __inline__ uint32_t __mysmid(){
 }
 
 __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandState *rnd_state, double eta, double *zetas, cuda::node_data_t node_data,
-        cuda::path_data_t path_data) {
+        cuda::path_data_t path_data, uint32_t *pidx_array, int64_t *pos_array, uint32_t *node_id_array, float *x_coords, float *y_coords, int32_t *seq_length_array) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
     assert(smid < 84);
@@ -65,7 +65,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(step_idx < path_data.total_path_steps);
 
     // find path of step of specific thread with LUT (threads in warp pick same path)
-    uint32_t path_idx = path_data.element_array[step_idx].pidx;
+    uint32_t path_idx = pidx_array[step_idx];
 
 
     path_t p = path_data.paths[path_idx];
@@ -122,17 +122,17 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(s1_idx != s2_idx);
 
 
-    uint32_t n1_id = p.elements[s1_idx].node_id;
-    int64_t n1_pos_in_path = p.elements[s1_idx].pos;
+    uint32_t n1_id = node_id_array[p.first_step_in_path + s1_idx];
+    int64_t n1_pos_in_path = pos_array[p.first_step_in_path + s1_idx];
     bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
     n1_pos_in_path = std::abs(n1_pos_in_path);
 
-    uint32_t n2_id = p.elements[s2_idx].node_id;
-    int64_t n2_pos_in_path = p.elements[s2_idx].pos;
+    uint32_t n2_id = node_id_array[p.first_step_in_path + s2_idx];
+    int64_t n2_pos_in_path = pos_array[p.first_step_in_path + s2_idx];
     bool n2_is_rev = (n2_pos_in_path < 0)? true: false;
     n2_pos_in_path = std::abs(n2_pos_in_path);
 
-    uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
+    uint32_t n1_seq_length = seq_length_array[n1_id];
     bool n1_use_other_end = (curand_uniform(thread_rnd_state) <= 0.5)? true: false;
     if (n1_use_other_end) {
         n1_pos_in_path += uint64_t{n1_seq_length};
@@ -141,7 +141,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         n1_use_other_end = n1_is_rev;
     }
 
-    uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
+    uint32_t n2_seq_length = seq_length_array[n2_id];
     bool n2_use_other_end = (curand_uniform(thread_rnd_state) <= 0.5)? true: false;
     if (n2_use_other_end) {
         n2_pos_in_path += uint64_t{n2_seq_length};
@@ -165,13 +165,13 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     double d_ij = term_dist;
 
-    int n1_offset = n1_use_other_end? 2: 0;
-    int n2_offset = n2_use_other_end? 2: 0;
+    int n1_offset = n1_use_other_end? 1: 0;
+    int n2_offset = n2_use_other_end? 1: 0;
 
-    float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
-    float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
-    float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
-    float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+    float *x1 = &x_coords[n1_id * 2 + n1_offset];
+    float *x2 = &x_coords[n2_id * 2 + n2_offset];
+    float *y1 = &y_coords[n1_id * 2 + n1_offset];
+    float *y2 = &y_coords[n2_id * 2 + n2_offset];
     double x1_val = double(*x1);
     double x2_val = double(*x2);
     double y1_val = double(*y1);
@@ -198,6 +198,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 }
 
 
+/*
 void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
     int nbr_threads = config.nthreads;
     std::cout << "cuda cpu layout (" << nbr_threads << " threads)" << std::endl;
@@ -436,6 +437,7 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 
     }
 }
+*/
 
 
 void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
@@ -449,7 +451,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "iter_max: " << config.iter_max << std::endl;
     std::cout << "first_cooling_iteration: " << config.first_cooling_iteration << std::endl;
     std::cout << "min_term_updates: " << config.min_term_updates << std::endl;
-    std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
+    //std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
     std::cout << "theta: " << config.theta << std::endl;
 
     // create eta array
@@ -479,21 +481,29 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     cuda::node_data_t node_data;
     node_data.node_count = node_count;
-    cudaMallocManaged(&node_data.nodes, node_count * sizeof(cuda::node_t));
+    //cudaMallocManaged(&node_data.nodes, node_count * sizeof(cuda::node_t));
+
+    float *x_coords;
+    float *y_coords;
+    cudaMallocManaged(&x_coords, node_count * 2 * sizeof(float));
+    cudaMallocManaged(&y_coords, node_count * 2 * sizeof(float));
+    int32_t *seq_length_array;
+    cudaMallocManaged(&seq_length_array, node_count * sizeof(int32_t));
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
         //assert(graph.has_node(node_idx));
-        cuda::node_t *n_tmp = &node_data.nodes[node_idx];
+        //cuda::node_t *n_tmp = &node_data.nodes[node_idx];
 
         // sequence length
         const handlegraph::handle_t h = graph.get_handle(node_idx + 1, false);
         // NOTE: unable store orientation (reverse), since this information is path dependent
-        n_tmp->seq_length = graph.get_length(h);
+        //n_tmp->seq_length = graph.get_length(h);
+        seq_length_array[node_idx] = graph.get_length(h);
 
         // copy random coordinates
-        n_tmp->coords[0] = float(X[node_idx * 2].load());
-        n_tmp->coords[1] = float(Y[node_idx * 2].load());
-        n_tmp->coords[2] = float(X[node_idx * 2 + 1].load());
-        n_tmp->coords[3] = float(Y[node_idx * 2 + 1].load());
+        x_coords[node_idx * 2] = float(X[node_idx * 2].load());
+        y_coords[node_idx * 2] = float(Y[node_idx * 2].load());
+        x_coords[node_idx * 2 + 1] = float(X[node_idx * 2 + 1].load());
+        y_coords[node_idx * 2 + 1] = float(Y[node_idx * 2 + 1].load());
     }
 
 
@@ -511,7 +521,17 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             path_handles.push_back(p);
             path_data.total_path_steps += graph.get_step_count(p);
         });
-    cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
+    //cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
+
+    // npi_iv in original implementation
+    uint32_t *pidx_array;
+    cudaMallocManaged(&pidx_array, path_data.total_path_steps * sizeof(uint32_t));
+
+    int64_t *pos_array;
+    cudaMallocManaged(&pos_array, path_data.total_path_steps * sizeof(int64_t));
+
+    uint32_t *node_id_array;
+    cudaMallocManaged(&node_id_array, path_data.total_path_steps * sizeof(uint32_t));
 
     // get length and starting position of all paths
     uint32_t first_step_counter = 0;
@@ -530,11 +550,13 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
         uint32_t step_count = path_data.paths[path_idx].step_count;
         uint32_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
-        if (step_count == 0) {
-            path_data.paths[path_idx].elements = NULL;
-        } else {
-            path_element_t *cur_path = &path_data.element_array[first_step_in_path];
-            path_data.paths[path_idx].elements = cur_path;
+        //if (step_count == 0) {
+            //path_data.paths[path_idx].elements = NULL;
+
+        //} else {
+        if (step_count > 0) {
+            //path_element_t *cur_path = &path_data.element_array[first_step_in_path];
+            //path_data.paths[path_idx].elements = cur_path;
 
             odgi::step_handle_t s = graph.path_begin(p);
             int64_t pos = 1;
@@ -543,13 +565,17 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
                 odgi::handle_t h = graph.get_handle_of_step(s);
                 //std::cout << graph.get_id(h) << std::endl;
 
-                cur_path[step_idx].node_id = graph.get_id(h) - 1;
-                cur_path[step_idx].pidx = uint32_t(path_idx);
+                //cur_path[step_idx].node_id = graph.get_id(h) - 1;
+                node_id_array[first_step_in_path + step_idx] = graph.get_id(h) - 1;
+                //cur_path[step_idx].pidx = uint32_t(path_idx);
+                pidx_array[first_step_in_path + step_idx] = uint32_t(path_idx);
                 // store position negative when handle reverse
                 if (graph.get_is_reverse(h)) {
-                    cur_path[step_idx].pos = -pos;
+                    //cur_path[step_idx].pos = -pos;
+                    pos_array[first_step_in_path + step_idx] = -pos;
                 } else {
-                    cur_path[step_idx].pos = pos;
+                    //cur_path[step_idx].pos = pos;
+                    pos_array[first_step_in_path + step_idx] = pos;
                 }
                 pos += graph.get_length(h);
 
@@ -608,13 +634,13 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
 
     for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
+        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, pidx_array, pos_array, node_id_array, x_coords, y_coords, seq_length_array);
         cudaError_t error = cudaDeviceSynchronize();
         std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
 
 #else
-    cpu_layout(config, etas, zetas, node_data, path_data);
+    //cpu_layout(config, etas, zetas, node_data, path_data);
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
@@ -624,8 +650,9 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     // copy coords back to X, Y vectors
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        cuda::node_t *n = &(node_data.nodes[node_idx]);
+        //cuda::node_t *n = &(node_data.nodes[node_idx]);
         // coords[0], coords[1], coords[2], coords[3] are stored consecutively. 
+        /*
         float *coords = n->coords;
         // check if coordinates valid (not NaN or infinite)
         for (int i = 0; i < 4; i++) {
@@ -633,20 +660,28 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
                 std::cout << "WARNING: invalid coordiate" << std::endl;
             }
         }
-        X[node_idx * 2].store(double(coords[0]));
-        Y[node_idx * 2].store(double(coords[1]));
-        X[node_idx * 2 + 1].store(double(coords[2]));
-        Y[node_idx * 2 + 1].store(double(coords[3]));
+        */
+        X[node_idx * 2].store(double(x_coords[node_idx * 2]));
+        Y[node_idx * 2].store(double(y_coords[node_idx * 2]));
+        X[node_idx * 2 + 1].store(double(x_coords[node_idx * 2 + 1]));
+        Y[node_idx * 2 + 1].store(double(y_coords[node_idx * 2 + 1]));
         //std::cout << "coords of " << node_idx << ": [" << X[node_idx*2] << "; " << Y[node_idx*2] << "] ; [" << X[node_idx*2+1] << "; " << Y[node_idx*2+1] <<"]\n";
     }
 
 
     // get rid of CUDA data structures
     cudaFree(etas);
-    cudaFree(node_data.nodes);
+    //cudaFree(node_data.nodes);
     cudaFree(path_data.paths);
-    cudaFree(path_data.element_array);
+    //cudaFree(path_data.element_array);
     cudaFree(zetas);
+
+    cudaFree(pidx_array);
+    cudaFree(pos_array);
+    cudaFree(node_id_array);
+    cudaFree(x_coords);
+    cudaFree(y_coords);
+    cudaFree(seq_length_array);
 #ifdef USE_GPU
     cudaFree(rnd_state);
 #endif
