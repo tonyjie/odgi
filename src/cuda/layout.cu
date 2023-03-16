@@ -199,7 +199,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
 
 void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data,
-        uint32_t *pidx_array, int64_t *pos_array, uint32_t *node_id_array, float *x_coords, float *y_coords, int32_t *seq_length_array) {
+        uint32_t *pidx_array, int64_t *pos_array, uint32_t *node_id_array, std::vector<std::atomic<double>> &x_coords, std::vector<std::atomic<double>> &y_coords, int32_t *seq_length_array) {
     int nbr_threads = config.nthreads;
     std::cout << "cuda cpu layout (" << nbr_threads << " threads)" << std::endl;
     std::vector<uint64_t> path_dist;
@@ -364,13 +364,13 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 before_load = std::chrono::high_resolution_clock::now();
                 total_duration_compute_first += std::chrono::duration_cast<std::chrono::nanoseconds>(before_load - start_sgd);
 #endif
-                float *x1 = &x_coords[n1_id * 2 + n1_offset];
-                float *x2 = &x_coords[n2_id * 2 + n2_offset];
-                float *y1 = &y_coords[n1_id * 2 + n1_offset];
-                float *y2 = &y_coords[n2_id * 2 + n2_offset];
+                std::atomic<double> *x1 = &x_coords[n1_id * 2 + n1_offset];
+                std::atomic<double> *x2 = &x_coords[n2_id * 2 + n2_offset];
+                std::atomic<double> *y1 = &y_coords[n1_id * 2 + n1_offset];
+                std::atomic<double> *y2 = &y_coords[n2_id * 2 + n2_offset];
 
-                double dx = float(*x1 - *x2);
-                double dy = float(*y1 - *y2);
+                double dx = double(x1->load() - x2->load());
+                double dy = double(y1->load() - y2->load());
 #ifdef profiling
                 after_load = std::chrono::high_resolution_clock::now();
                 total_duration_load += std::chrono::duration_cast<std::chrono::nanoseconds>(after_load - before_load);
@@ -391,10 +391,10 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 before_store = std::chrono::high_resolution_clock::now();
                 total_duration_compute_second += std::chrono::duration_cast<std::chrono::nanoseconds>(before_store - after_load);
 #endif
-                *x1 -= float(r_x);
-                *y1 -= float(r_y);
-                *x2 += float(r_x);
-                *y2 += float(r_y);
+                x1->store(x1->load() - double(r_x));
+                y1->store(y1->load() - double(r_y));
+                x2->store(x2->load() + double(r_x));
+                y2->store(y2->load() + double(r_y));
 #ifdef profiling
                 after_store = std::chrono::high_resolution_clock::now();
                 total_duration_store += std::chrono::duration_cast<std::chrono::nanoseconds>(after_store - before_store);
@@ -485,10 +485,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     node_data.node_count = node_count;
     //cudaMallocManaged(&node_data.nodes, node_count * sizeof(cuda::node_t));
 
-    float *x_coords;
-    float *y_coords;
-    cudaMallocManaged(&x_coords, node_count * 2 * sizeof(float));
-    cudaMallocManaged(&y_coords, node_count * 2 * sizeof(float));
+    //double *x_coords;
+    //double *y_coords;
+    //cudaMallocManaged(&x_coords, node_count * 2 * sizeof(double));
+    //cudaMallocManaged(&y_coords, node_count * 2 * sizeof(double));
+    std::vector<std::atomic<double>> x_coords(2 * node_count);
+    std::vector<std::atomic<double>> y_coords(2 * node_count);
     int32_t *seq_length_array;
     cudaMallocManaged(&seq_length_array, node_count * sizeof(int32_t));
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
@@ -502,10 +504,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         seq_length_array[node_idx] = graph.get_length(h);
 
         // copy random coordinates
-        x_coords[node_idx * 2] = float(X[node_idx * 2].load());
-        y_coords[node_idx * 2] = float(Y[node_idx * 2].load());
-        x_coords[node_idx * 2 + 1] = float(X[node_idx * 2 + 1].load());
-        y_coords[node_idx * 2 + 1] = float(Y[node_idx * 2 + 1].load());
+        x_coords[node_idx * 2].store(double(X[node_idx * 2].load()));
+        y_coords[node_idx * 2].store(double(Y[node_idx * 2].load()));
+        x_coords[node_idx * 2 + 1].store(double(X[node_idx * 2 + 1].load()));
+        y_coords[node_idx * 2 + 1].store(double(Y[node_idx * 2 + 1].load()));
     }
 
 
@@ -619,7 +621,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
 
     auto start_compute = std::chrono::high_resolution_clock::now();
-#define USE_GPU
+//#define USE_GPU
 #ifdef USE_GPU
     std::cout << "cuda gpu layout" << std::endl;
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
@@ -663,10 +665,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             }
         }
         */
-        X[node_idx * 2].store(double(x_coords[node_idx * 2]));
-        Y[node_idx * 2].store(double(y_coords[node_idx * 2]));
-        X[node_idx * 2 + 1].store(double(x_coords[node_idx * 2 + 1]));
-        Y[node_idx * 2 + 1].store(double(y_coords[node_idx * 2 + 1]));
+        X[node_idx * 2].store(double(x_coords[node_idx * 2].load()));
+        Y[node_idx * 2].store(double(y_coords[node_idx * 2].load()));
+        X[node_idx * 2 + 1].store(double(x_coords[node_idx * 2 + 1].load()));
+        Y[node_idx * 2 + 1].store(double(y_coords[node_idx * 2 + 1].load()));
         //std::cout << "coords of " << node_idx << ": [" << X[node_idx*2] << "; " << Y[node_idx*2] << "] ; [" << X[node_idx*2+1] << "; " << Y[node_idx*2+1] <<"]\n";
     }
 
@@ -681,8 +683,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaFree(pidx_array);
     cudaFree(pos_array);
     cudaFree(node_id_array);
-    cudaFree(x_coords);
-    cudaFree(y_coords);
+    //cudaFree(x_coords);
+    //cudaFree(y_coords);
     cudaFree(seq_length_array);
 #ifdef USE_GPU
     cudaFree(rnd_state);
