@@ -198,8 +198,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 }
 
 
-/*
-void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
+void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data,
+        uint32_t *pidx_array, int64_t *pos_array, uint32_t *node_id_array, float *x_coords, float *y_coords, int32_t *seq_length_array) {
     int nbr_threads = config.nthreads;
     std::cout << "cuda cpu layout (" << nbr_threads << " threads)" << std::endl;
     std::vector<uint64_t> path_dist;
@@ -213,7 +213,7 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 
         XoshiroCpp::Xoshiro256Plus gen(9399220 + tid);
         std::uniform_int_distribution<uint64_t> flip(0, 1);
-        std::discrete_distribution<> rand_path(path_dist.begin(), path_dist.end());
+        //std::discrete_distribution<> rand_path(path_dist.begin(), path_dist.end());
 
         const int steps_per_thread = config.min_term_updates / nbr_threads;
 
@@ -253,7 +253,10 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 start_dist = std::chrono::high_resolution_clock::now();
 #endif
                 // get path
-                uint32_t path_idx = rand_path(gen);
+                std::uniform_int_distribution<uint32_t> rand_total_steps(0, path_data.total_path_steps-1);
+                uint32_t step_idx = rand_total_steps(gen);
+
+                uint32_t path_idx = pidx_array[step_idx];
                 path_t p = path_data.paths[path_idx];
                 if (p.step_count < 2) {
                     continue;
@@ -303,17 +306,17 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 assert(s1_idx < p.step_count);
                 assert(s2_idx < p.step_count);
 
-                uint32_t n1_id = p.elements[s1_idx].node_id;
-                int64_t n1_pos_in_path = p.elements[s1_idx].pos;
+                uint32_t n1_id = node_id_array[p.first_step_in_path + s1_idx];
+                int64_t n1_pos_in_path = pos_array[p.first_step_in_path + s1_idx];
                 bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
                 n1_pos_in_path = std::abs(n1_pos_in_path);
 
-                uint32_t n2_id = p.elements[s2_idx].node_id;
-                int64_t n2_pos_in_path = p.elements[s2_idx].pos;
+                uint32_t n2_id = node_id_array[p.first_step_in_path + s2_idx];
+                int64_t n2_pos_in_path = pos_array[p.first_step_in_path + s2_idx];
                 bool n2_is_rev = (n2_pos_in_path < 0)? true: false;
                 n2_pos_in_path = std::abs(n2_pos_in_path);
 
-                uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
+                uint32_t n1_seq_length = seq_length_array[n1_id];
                 bool n1_use_other_end = flip(gen);
                 if (n1_use_other_end) {
                     n1_pos_in_path += uint64_t{n1_seq_length};
@@ -322,7 +325,7 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                     n1_use_other_end = n1_is_rev;
                 }
 
-                uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
+                uint32_t n2_seq_length = seq_length_array[n2_id];
                 bool n2_use_other_end = flip(gen);
                 if (n2_use_other_end) {
                     n2_pos_in_path += uint64_t{n2_seq_length};
@@ -354,17 +357,17 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 
                 double d_ij = term_dist;
 
-                int n1_offset = n1_use_other_end? 2: 0;
-                int n2_offset = n2_use_other_end? 2: 0;
+                int n1_offset = n1_use_other_end? 1: 0;
+                int n2_offset = n2_use_other_end? 1: 0;
 
 #ifdef profiling
                 before_load = std::chrono::high_resolution_clock::now();
                 total_duration_compute_first += std::chrono::duration_cast<std::chrono::nanoseconds>(before_load - start_sgd);
 #endif
-                float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
-                float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
-                float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
-                float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+                float *x1 = &x_coords[n1_id * 2 + n1_offset];
+                float *x2 = &x_coords[n2_id * 2 + n2_offset];
+                float *y1 = &y_coords[n1_id * 2 + n1_offset];
+                float *y2 = &y_coords[n2_id * 2 + n2_offset];
 
                 double dx = float(*x1 - *x2);
                 double dy = float(*y1 - *y2);
@@ -437,7 +440,6 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 
     }
 }
-*/
 
 
 void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
@@ -640,7 +642,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     }
 
 #else
-    //cpu_layout(config, etas, zetas, node_data, path_data);
+    cpu_layout(config, etas, zetas, node_data, path_data, pidx_array, pos_array, node_id_array, x_coords, y_coords, seq_length_array);
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
