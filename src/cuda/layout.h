@@ -23,6 +23,7 @@ namespace cuda {
 
 struct __align__(8) node_t {
     float coords[4];
+    // TODO move half of coordinates in front and other behind
     int32_t seq_length;
 };
 struct node_data_t {
@@ -50,8 +51,21 @@ struct path_data_t {
     path_element_t *element_array;
 };
 
-#define BLOCK_SIZE 1024
 
+#define SM_COUNT 84
+#define BLOCK_SIZE 1024
+struct curandStateXORWOWCoalesced_t {
+    unsigned int d[BLOCK_SIZE];
+    unsigned int v0[BLOCK_SIZE];
+    unsigned int v1[BLOCK_SIZE];
+    unsigned int v2[BLOCK_SIZE];
+    unsigned int v3[BLOCK_SIZE];
+    unsigned int v4[BLOCK_SIZE];
+};
+typedef struct curandStateXORWOWCoalesced_t curandStateCoalesced_t;
+
+
+// TODO: make parameters constant?
 struct layout_config_t {
     uint64_t iter_max;
     uint64_t min_term_updates;
