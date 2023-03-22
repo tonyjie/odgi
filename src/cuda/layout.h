@@ -55,11 +55,11 @@ struct path_data_t {
 #define BLOCK_SIZE 1024
 struct curandStateXORWOWCoalesced_t {
     unsigned int d[BLOCK_SIZE];
-    unsigned int v0[BLOCK_SIZE];
-    unsigned int v1[BLOCK_SIZE];
-    unsigned int v2[BLOCK_SIZE];
-    unsigned int v3[BLOCK_SIZE];
-    unsigned int v4[BLOCK_SIZE];
+    unsigned int w0[BLOCK_SIZE];
+    unsigned int w1[BLOCK_SIZE];
+    unsigned int w2[BLOCK_SIZE];
+    unsigned int w3[BLOCK_SIZE];
+    unsigned int w4[BLOCK_SIZE];
 };
 typedef struct curandStateXORWOWCoalesced_t curandStateCoalesced_t;
 
