@@ -11,28 +11,30 @@ __global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoales
     curand_init(42+tid, tid, 0, &rnd_state_tmp[tid]);
     // copy to coalesced data structure
     rnd_state[blockIdx.x].d[threadIdx.x] = rnd_state_tmp[tid].d;
-    rnd_state[blockIdx.x].v0[threadIdx.x] = rnd_state_tmp[tid].v[0];
-    rnd_state[blockIdx.x].v1[threadIdx.x] = rnd_state_tmp[tid].v[1];
-    rnd_state[blockIdx.x].v2[threadIdx.x] = rnd_state_tmp[tid].v[2];
-    rnd_state[blockIdx.x].v3[threadIdx.x] = rnd_state_tmp[tid].v[3];
-    rnd_state[blockIdx.x].v4[threadIdx.x] = rnd_state_tmp[tid].v[4];
+    rnd_state[blockIdx.x].w0[threadIdx.x] = rnd_state_tmp[tid].v[0];
+    rnd_state[blockIdx.x].w1[threadIdx.x] = rnd_state_tmp[tid].v[1];
+    rnd_state[blockIdx.x].w2[threadIdx.x] = rnd_state_tmp[tid].v[2];
+    rnd_state[blockIdx.x].w3[threadIdx.x] = rnd_state_tmp[tid].v[3];
+    rnd_state[blockIdx.x].w4[threadIdx.x] = rnd_state_tmp[tid].v[4];
 }
 
 
 __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
-    // generate 32 bit pseudorandom value with XORWOW generator; see curand function in curand_kernel.h
+    // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
+    // also used in curand library (see curand_kernel.h)
     uint32_t t;
-    t = (state->v0[thread_id] ^ (state->v0[thread_id] >> 2));
-    state->v0[thread_id] = state->v1[thread_id];
-    state->v1[thread_id] = state->v2[thread_id];
-    state->v2[thread_id] = state->v3[thread_id];
-    state->v3[thread_id] = state->v4[thread_id];
-    state->v4[thread_id] = (state->v4[thread_id] ^ (state->v4[thread_id] << 4)) ^ (t ^ (t <<1));
+    t = state->w0[thread_id] ^ (state->w0[thread_id] >> 2);
+    state->w0[thread_id] = state->w1[thread_id];
+    state->w1[thread_id] = state->w2[thread_id];
+    state->w2[thread_id] = state->w3[thread_id];
+    state->w3[thread_id] = state->w4[thread_id];
+    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
     state->d[thread_id] += 362437;
 
-    uint32_t rnd_uint = state->v4[thread_id] + state->d[thread_id];
-    // convert to float; see _curand_uniform function in curand_uniform.h
-    return rnd_uint * CURAND_2POW32_INV + (CURAND_2POW32_INV/2.0f);
+    uint32_t rnd_uint = state->d[thread_id] + state->w0[thread_id];
+
+    // convert to float; see curand_uniform.h
+    return _curand_uniform(rnd_uint);
 }
 
 
