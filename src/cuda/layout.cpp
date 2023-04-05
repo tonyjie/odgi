@@ -401,13 +401,13 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 before_load = std::chrono::high_resolution_clock::now();
                 total_duration_compute_first += std::chrono::duration_cast<std::chrono::nanoseconds>(before_load - start_sgd);
 #endif
-                float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
-                float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
-                float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
-                float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+                std::atomic<float> *x1 = &node_data.nodes[n1_id].coords[n1_offset];
+                std::atomic<float> *x2 = &node_data.nodes[n2_id].coords[n2_offset];
+                std::atomic<float> *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
+                std::atomic<float> *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
 
-                double dx = float(*x1 - *x2);
-                double dy = float(*y1 - *y2);
+                double dx = float(x1->load() - x2->load());
+                double dy = float(y1->load() - y2->load());
 #ifdef profiling
                 after_load = std::chrono::high_resolution_clock::now();
                 total_duration_load += std::chrono::duration_cast<std::chrono::nanoseconds>(after_load - before_load);
@@ -428,10 +428,10 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 before_store = std::chrono::high_resolution_clock::now();
                 total_duration_compute_second += std::chrono::duration_cast<std::chrono::nanoseconds>(before_store - after_load);
 #endif
-                *x1 -= float(r_x);
-                *y1 -= float(r_y);
-                *x2 += float(r_x);
-                *y2 += float(r_y);
+                x1->store(x1->load() - float(r_x));
+                y1->store(y1->load() - float(r_y));
+                x2->store(x2->load() + float(r_x));
+                y2->store(y2->load() + float(r_y));
 #ifdef profiling
                 after_store = std::chrono::high_resolution_clock::now();
                 total_duration_store += std::chrono::duration_cast<std::chrono::nanoseconds>(after_store - before_store);
@@ -533,10 +533,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         n_tmp->seq_length = graph.get_length(h);
 
         // copy random coordinates
-        n_tmp->coords[0] = float(X[node_idx * 2].load());
-        n_tmp->coords[1] = float(Y[node_idx * 2].load());
-        n_tmp->coords[2] = float(X[node_idx * 2 + 1].load());
-        n_tmp->coords[3] = float(Y[node_idx * 2 + 1].load());
+        n_tmp->coords[0].store(float(X[node_idx * 2].load()));
+        n_tmp->coords[1].store(float(Y[node_idx * 2].load()));
+        n_tmp->coords[2].store(float(X[node_idx * 2 + 1].load()));
+        n_tmp->coords[3].store(float(Y[node_idx * 2 + 1].load()));
     }
 
 
@@ -678,17 +678,17 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
         cuda::node_t *n = &(node_data.nodes[node_idx]);
         // coords[0], coords[1], coords[2], coords[3] are stored consecutively. 
-        float *coords = n->coords;
+        std::atomic<float> *coords = n->coords;
         // check if coordinates valid (not NaN or infinite)
         for (int i = 0; i < 4; i++) {
-            if (!isfinite(coords[i])) {
+            if (!isfinite(coords[i].load())) {
                 std::cout << "WARNING: invalid coordiate" << std::endl;
             }
         }
-        X[node_idx * 2].store(double(coords[0]));
-        Y[node_idx * 2].store(double(coords[1]));
-        X[node_idx * 2 + 1].store(double(coords[2]));
-        Y[node_idx * 2 + 1].store(double(coords[3]));
+        X[node_idx * 2].store(double(coords[0].load()));
+        Y[node_idx * 2].store(double(coords[1].load()));
+        X[node_idx * 2 + 1].store(double(coords[2].load()));
+        Y[node_idx * 2 + 1].store(double(coords[3].load()));
         //std::cout << "coords of " << node_idx << ": [" << X[node_idx*2] << "; " << Y[node_idx*2] << "] ; [" << X[node_idx*2+1] << "; " << Y[node_idx*2+1] <<"]\n";
     }
 

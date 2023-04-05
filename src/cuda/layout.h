@@ -22,7 +22,7 @@ namespace cuda {
 
 
 struct node_t {
-    float coords[4];
+    std::atomic<float> coords[4];
     int32_t seq_length;
 };
 struct node_data_t {
