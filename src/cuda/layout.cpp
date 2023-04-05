@@ -1,11 +1,12 @@
 #include "layout.h"
-#include <cuda.h>
+//#include <cuda.h>
 #include <assert.h>
 
 
 namespace cuda {
 
-__global__ void cuda_device_init(curandState *rnd_state) {
+/*
+__global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoalesced_t *rnd_state) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     curand_init(42+tid, tid, 0, &rnd_state[tid]);
 }
@@ -196,6 +197,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     atomicExch(y1, float(y1_val - r_y));
     atomicExch(y2, float(y2_val + r_y));
 }
+*/
 
 
 void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data,
@@ -458,7 +460,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     // create eta array
     double *etas;
-    cudaMallocManaged(&etas, config.iter_max * sizeof(double));
+    //cudaMallocManaged(&etas, config.iter_max * sizeof(double));
+    etas = (double*) malloc(config.iter_max * sizeof(double));
 
     const int32_t iter_max = config.iter_max;
     const int32_t iter_with_max_learning_rate = config.iter_with_max_learning_rate;
@@ -492,7 +495,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::vector<std::atomic<double>> x_coords(2 * node_count);
     std::vector<std::atomic<double>> y_coords(2 * node_count);
     int32_t *seq_length_array;
-    cudaMallocManaged(&seq_length_array, node_count * sizeof(int32_t));
+    seq_length_array = (int32_t*) malloc(node_count * sizeof(int32_t));
+    //cudaMallocManaged(&seq_length_array, node_count * sizeof(int32_t));
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
         //assert(graph.has_node(node_idx));
         //cuda::node_t *n_tmp = &node_data.nodes[node_idx];
@@ -516,7 +520,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cuda::path_data_t path_data;
     path_data.path_count = path_count;
     path_data.total_path_steps = 0;
-    cudaMallocManaged(&path_data.paths, path_count * sizeof(cuda::path_t));
+    //cudaMallocManaged(&path_data.paths, path_count * sizeof(cuda::path_t));
+    path_data.paths = (cuda::path_t*) malloc(path_count * sizeof(cuda::path_t));
 
     vector<odgi::path_handle_t> path_handles{};
     path_handles.reserve(path_count);
@@ -529,13 +534,16 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     // npi_iv in original implementation
     uint32_t *pidx_array;
-    cudaMallocManaged(&pidx_array, path_data.total_path_steps * sizeof(uint32_t));
+    //cudaMallocManaged(&pidx_array, path_data.total_path_steps * sizeof(uint32_t));
+    pidx_array = (uint32_t*) malloc(path_data.total_path_steps * sizeof(uint32_t));
 
     int64_t *pos_array;
-    cudaMallocManaged(&pos_array, path_data.total_path_steps * sizeof(int64_t));
+    //cudaMallocManaged(&pos_array, path_data.total_path_steps * sizeof(int64_t));
+    pos_array = (int64_t*) malloc(path_data.total_path_steps * sizeof(int64_t));
 
     uint32_t *node_id_array;
-    cudaMallocManaged(&node_id_array, path_data.total_path_steps * sizeof(uint32_t));
+    //cudaMallocManaged(&node_id_array, path_data.total_path_steps * sizeof(uint32_t));
+    node_id_array = (uint32_t*) malloc(path_data.total_path_steps * sizeof(uint32_t));
 
     // get length and starting position of all paths
     uint32_t first_step_counter = 0;
@@ -604,7 +612,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "config.space: " << config.space << std::endl;
     std::cout << "config.space_quantization: " << config.space_quantization_step << std::endl;
 
-    cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
+    //cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
+    zetas = (double*) malloc(zetas_cnt * sizeof(double));
     double zeta_tmp = 0.0;
     for (uint64_t i = 1; i < config.space + 1; i++) {
         zeta_tmp += dirtyzipf::fast_precise_pow(1.0 / i, config.theta);
@@ -623,6 +632,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto start_compute = std::chrono::high_resolution_clock::now();
 //#define USE_GPU
 #ifdef USE_GPU
+    /*
     std::cout << "cuda gpu layout" << std::endl;
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 
@@ -642,13 +652,14 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         cudaError_t error = cudaDeviceSynchronize();
         std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
+    */
 
 #else
     cpu_layout(config, etas, zetas, node_data, path_data, pidx_array, pos_array, node_id_array, x_coords, y_coords, seq_length_array);
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
-    std::cout << "CUDA layout compute took " << duration_compute_ms << "ms" << std::endl;
+    std::cout << "CPU cache-optimized layout compute took " << duration_compute_ms << "ms" << std::endl;
 
 
 
@@ -674,27 +685,27 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
 
     // get rid of CUDA data structures
-    cudaFree(etas);
-    //cudaFree(node_data.nodes);
-    cudaFree(path_data.paths);
-    //cudaFree(path_data.element_array);
-    cudaFree(zetas);
+    free(etas);
+    //free(node_data.nodes);
+    free(path_data.paths);
+    //free(path_data.element_array);
+    free(zetas);
 
-    cudaFree(pidx_array);
-    cudaFree(pos_array);
-    cudaFree(node_id_array);
-    //cudaFree(x_coords);
-    //cudaFree(y_coords);
-    cudaFree(seq_length_array);
+    free(pidx_array);
+    free(pos_array);
+    free(node_id_array);
+    //free(x_coords);
+    //free(y_coords);
+    free(seq_length_array);
 #ifdef USE_GPU
-    cudaFree(rnd_state);
+    //cudaFree(rnd_state);
 #endif
 
 
 #ifdef cuda_layout_profiling
     auto end = std::chrono::high_resolution_clock::now();
     uint32_t duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "CUDA layout took " << duration_ms << "ms" << std::endl;
+    //std::cout << "CPU cache-optimized layout took " << duration_ms << "ms" << std::endl;
 #endif
 
     return;
