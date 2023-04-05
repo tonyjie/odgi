@@ -5,8 +5,8 @@
 #include <omp.h>
 #include <random>
 #include <math.h>
-#include <curand.h>
-#include <curand_kernel.h>
+//#include <curand.h>
+//#include <curand_kernel.h>
 #include <sstream>
 #include <iomanip>
 
@@ -21,7 +21,7 @@
 namespace cuda {
 
 
-struct __align__(8) node_t {
+struct node_t {
     float coords[4];
     int32_t seq_length;
 };
@@ -31,7 +31,7 @@ struct node_data_t {
 };
 
 
-struct __align__(8) path_element_t {
+struct path_element_t {
     uint32_t pidx;
     uint32_t node_id;
     int64_t pos;    // if position negative: reverse orientation
