@@ -294,7 +294,7 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 total_duration_one_step_gen += std::chrono::duration_cast<std::chrono::nanoseconds>(one_step_gen - start_dist);
 #endif
                 uint32_t s2_idx;
-                if (iter + 1 >= config.first_cooling_iteration || flip(gen)) {
+                if (iter >= config.first_cooling_iteration || flip(gen)) {
                     if (s1_idx > 0 && flip(gen) || s1_idx == p.step_count-1) {
                         // go backward
                         uint32_t jump_space = std::min(config.space, s1_idx);
