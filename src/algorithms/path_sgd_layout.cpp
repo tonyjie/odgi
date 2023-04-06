@@ -137,7 +137,7 @@ namespace odgi {
                                         iteration++;
                                         snapshot_in_progress.store(false);
                                     }
-                                    if (iteration > iter_max) {
+                                    if (iteration >= iter_max) {
                                         work_todo.store(false);
                                     } else if (Delta_max.load() <= delta) { // nb: this will also break at 0
                                         if (progress) {
@@ -150,7 +150,7 @@ namespace odgi {
                                     } else {
                                         eta.store(etas[iteration]); // update our learning rate
                                         Delta_max.store(delta); // set our delta max to the threshold
-                                        if (iteration > first_cooling_iteration) {
+                                        if (iteration >= first_cooling_iteration) {
                                             //std::cerr << std::endl << "setting cooling!!" << std::endl;
                                             adj_theta.store(0.001);
                                             cooling.store(true);
