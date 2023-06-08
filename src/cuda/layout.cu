@@ -18,6 +18,26 @@ __global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoales
     rnd_state[blockIdx.x].w4[threadIdx.x] = rnd_state_tmp[tid].v[4];
 }
 
+/**
+ * @brief: Return 32-bits of pseudorandomness from an XORWOW generator. from "curand_kernel.h"
+ * For some use cases, we don't need floating point uniform distribution. So we don't need to call `curand_uniform_coalesced` as below. We shall use this function. 
+ * \param state - Pointer to state to update
+ * \param thread_id - Thread id
+ * \return 32-bits of pseudorandomness as an unsigned int, all bits valid to use.
+*/
+__device__ 
+unsigned int curand_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
+    // Return 32-bits of pseudorandomness from an XORWOW generator. 
+    uint32_t t;
+    t = (state->w0[thread_id] ^ (state->w0[thread_id] >> 2));
+    state->w0[thread_id] = state->w1[thread_id];
+    state->w1[thread_id] = state->w2[thread_id];
+    state->w2[thread_id] = state->w3[thread_id];
+    state->w3[thread_id] = state->w4[thread_id];
+    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
+    state->d[thread_id] += 362437;    
+    return state->w4[thread_id] + state->d[thread_id];
+}
 
 __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
     // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
@@ -31,7 +51,7 @@ __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_
     state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
     state->d[thread_id] += 362437;
 
-    uint32_t rnd_uint = state->d[thread_id] + state->w0[thread_id];
+    uint32_t rnd_uint = state->d[thread_id] + state->w0[thread_id]; // why w0, not w4? Is this a TYPO?
 
     // convert to float; see curand_uniform.h
     return _curand_uniform(rnd_uint);
@@ -80,25 +100,24 @@ static __device__ __inline__ uint32_t __mysmid(){
     return smid;
 }
 
-/*
-@brief: update the coordinates of two visualization nodes in the 2D layout space
-This function is called multiple times in one `cuda_device_layout` in order to increase the data reuse. 
-Each time, the warp shuffle intrinsics are used to change the selection of node 2 among the 32 threads in the warp. 
-E.g. Iter : Step Pairs Selected would be: 
-    1: (a0, b0), (a1, b1), (a2, b2), ..., (a31, b31)
-    2: (a0, b9), (a1, b0), (a2, b3), ..., (a31, b4)
-    3: (a0, b1), (a1, b4), (a2, b1), ..., (a31, b10)
-    ...
-`b` is randomly chosen from the 32 threads in the warp. 
-
-@param n1_pos_in_path: position of node 1 in the current selected path
-@param n1_id: id of node 1
-@param n1_offset: offset of node 1
-@param n2_pos_in_path: position of node 2 in the current selected path
-@param n2_id: id of node 2
-@param n2_offset: offset of node 2
-@param eta: an coefficient used in the update formula
-@param node_data: the data structure that stores the coordinates of all nodes
+/**
+* @brief: update the coordinates of two visualization nodes in the 2D layout space
+* This function is called multiple times in one `cuda_device_layout` in order to increase the data reuse. 
+* Each time, the warp shuffle intrinsics are used to change the selection of node 2 among the 32 threads in the warp. 
+* E.g. Iter : Step Pairs Selected would be: 
+*     1: (a0, b0), (a1, b1), (a2, b2), ..., (a31, b31)
+*     2: (a0, b9), (a1, b0), (a2, b3), ..., (a31, b4)
+*     3: (a0, b1), (a1, b4), (a2, b1), ..., (a31, b10)
+*     ...
+* `b` is randomly chosen from the 32 threads in the warp. 
+* @param n1_pos_in_path: position of node 1 in the current selected path
+* @param n1_id: id of node 1
+* @param n1_offset: offset of node 1
+* @param n2_pos_in_path: position of node 2 in the current selected path
+* @param n2_id: id of node 2
+* @param n2_offset: offset of node 2
+* @param eta: an coefficient used in the update formula
+* @param node_data: the data structure that stores the coordinates of all nodes
 */
 __device__
 void update_pos_gpu(int64_t &n1_pos_in_path, uint32_t &n1_id, int &n1_offset,
@@ -266,6 +285,30 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     update_pos_gpu(n1_pos_in_path, n1_id, n1_offset, 
                    n2_pos_in_path, n2_id, n2_offset, 
                    eta, node_data);
+
+#define UPDATE_TIMES 2
+    // Data Reuse for the non-cooling iteration
+    if (!cooling[threadIdx.x / 32]) {
+        // Shuffle and Update (DATA_REUSE_TIMES = UPDATE_TIMES - 1) times (UPDATE_TIMES is the total update times when calling `cuda_device_layout` once)
+        for (int i = 0; i < UPDATE_TIMES - 1; i++) {
+            // Shuffle the step data within a warp
+            int shuffle_laneId = curand_coalesced(thread_rnd_state, threadIdx.x) % 32;
+            uint64_t n2_pos_in_path_tmp = __shfl_sync(0xffffffff, n2_pos_in_path, shuffle_laneId);
+            uint32_t n2_id_tmp = __shfl_sync(0xffffffff, n2_id, shuffle_laneId);
+            int n2_offset_tmp = __shfl_sync(0xffffffff, n2_offset, shuffle_laneId);
+
+            n2_pos_in_path = n2_pos_in_path_tmp;
+            n2_id = n2_id_tmp;
+            n2_offset = n2_offset_tmp;
+
+            if ((n1_id != n2_id) || (n1_offset != n2_offset)) { // Only update if the two nodes are different
+                update_pos_gpu(n1_pos_in_path, n1_id, n1_offset,
+                            n2_pos_in_path, n2_id, n2_offset,
+                            eta, node_data);
+            }
+
+        }
+    }
 
 }
 
