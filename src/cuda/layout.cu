@@ -80,8 +80,8 @@ static __device__ __inline__ uint32_t __mysmid(){
     return smid;
 }
 
-__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, cuda::node_data_t node_data,
-        cuda::path_data_t path_data) {
+__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, 
+                                   cuda::node_data_t node_data, cuda::path_data_t path_data) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
     assert(smid < 84);
@@ -101,12 +101,11 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
     __syncwarp();
 
-    // find path of step of specific thread with LUT (threads in warp pick same path)
+    // find path of step of specific thread with LUT (threads in one warp pick the same path `p`)
     uint32_t step_idx = first_step_idx[threadIdx.x / 32];
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
-
-
     path_t p = path_data.paths[path_idx];
+
     if (p.step_count < 2) {
         return;
     }
