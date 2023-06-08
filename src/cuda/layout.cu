@@ -80,6 +80,75 @@ static __device__ __inline__ uint32_t __mysmid(){
     return smid;
 }
 
+/*
+@brief: update the coordinates of two visualization nodes in the 2D layout space
+This function is called multiple times in one `cuda_device_layout` in order to increase the data reuse. 
+Each time, the warp shuffle intrinsics are used to change the selection of node 2 among the 32 threads in the warp. 
+E.g. Iter : Step Pairs Selected would be: 
+    1: (a0, b0), (a1, b1), (a2, b2), ..., (a31, b31)
+    2: (a0, b9), (a1, b0), (a2, b3), ..., (a31, b4)
+    3: (a0, b1), (a1, b4), (a2, b1), ..., (a31, b10)
+    ...
+`b` is randomly chosen from the 32 threads in the warp. 
+
+@param n1_pos_in_path: position of node 1 in the current selected path
+@param n1_id: id of node 1
+@param n1_offset: offset of node 1
+@param n2_pos_in_path: position of node 2 in the current selected path
+@param n2_id: id of node 2
+@param n2_offset: offset of node 2
+@param eta: an coefficient used in the update formula
+@param node_data: the data structure that stores the coordinates of all nodes
+*/
+__device__
+void update_pos_gpu(int64_t &n1_pos_in_path, uint32_t &n1_id, int &n1_offset,
+                    int64_t &n2_pos_in_path, uint32_t &n2_id, int &n2_offset,
+                    double eta, 
+                    cuda::node_data_t &node_data) {
+    double term_dist = std::abs(static_cast<double>(n1_pos_in_path) - static_cast<double>(n2_pos_in_path));
+
+    if (term_dist < 1e-9) {
+        term_dist = 1e-9;
+    }
+
+    double w_ij = 1.0 / term_dist;
+
+    double mu = eta * w_ij;
+    if (mu > 1.0) {
+        mu = 1.0;
+    }
+
+    float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
+    float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
+    float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
+    float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+    double x1_val = double(*x1);
+    double x2_val = double(*x2);
+    double y1_val = double(*y1);
+    double y2_val = double(*y2);
+
+    double dx = x1_val - x2_val;
+    double dy = y1_val - y2_val;
+
+    if (dx == 0.0) {
+        dx = 1e-9;
+    }
+
+    double mag = sqrt(dx * dx + dy * dy);
+    double delta = mu * (mag - term_dist) / 2.0;
+    //double delta_abs = std::abs(delta);
+
+    // TODO implement delta max stop functionality
+    double r = delta / mag;
+    double r_x = r * dx;
+    double r_y = r * dy;
+    // TODO check current value before updating
+    atomicExch(x1, float(x1_val - r_x));
+    atomicExch(x2, float(x2_val + r_x));
+    atomicExch(y1, float(y1_val - r_y));
+    atomicExch(y2, float(y2_val + r_y)); 
+}
+
 __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, 
                                    cuda::node_data_t node_data, cuda::path_data_t path_data) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -190,51 +259,14 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         n2_use_other_end = n2_is_rev;
     }
 
-    double term_dist = std::abs(static_cast<double>(n1_pos_in_path) - static_cast<double>(n2_pos_in_path));
-
-    if (term_dist < 1e-9) {
-        term_dist = 1e-9;
-    }
-
-    double w_ij = 1.0 / term_dist;
-
-    double mu = eta * w_ij;
-    if (mu > 1.0) {
-        mu = 1.0;
-    }
-
-    double d_ij = term_dist;
-
     int n1_offset = n1_use_other_end? 2: 0;
     int n2_offset = n2_use_other_end? 2: 0;
 
-    float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
-    float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
-    float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
-    float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
-    double x1_val = double(*x1);
-    double x2_val = double(*x2);
-    double y1_val = double(*y1);
-    double y2_val = double(*y2);
+    // Update Coordinates based on the data of selected nodes: n_pos_in_path, n_id, n_offset
+    update_pos_gpu(n1_pos_in_path, n1_id, n1_offset, 
+                   n2_pos_in_path, n2_id, n2_offset, 
+                   eta, node_data);
 
-    double dx = x1_val - x2_val;
-    double dy = y1_val - y2_val;
-
-    if (dx == 0.0) {
-        dx = 1e-9;
-    }
-
-    double mag = sqrt(dx * dx + dy * dy);
-    double delta = mu * (mag - d_ij) / 2.0;
-    //double delta_abs = std::abs(delta);
-
-    double r = delta / mag;
-    double r_x = r * dx;
-    double r_y = r * dy;
-    atomicExch(x1, float(x1_val - r_x));
-    atomicExch(x2, float(x2_val + r_x));
-    atomicExch(y1, float(y1_val - r_y));
-    atomicExch(y2, float(y2_val + r_y));
 }
 
 
