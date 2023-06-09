@@ -39,7 +39,8 @@ unsigned int curand_coalesced(curandStateCoalesced_t *state, uint32_t thread_id)
     return state->w4[thread_id] + state->d[thread_id];
 }
 
-__device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
+__device__
+float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
     // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
     // also used in curand library (see curand_kernel.h)
     uint32_t t;
@@ -51,7 +52,7 @@ __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_
     state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
     state->d[thread_id] += 362437;
 
-    uint32_t rnd_uint = state->d[thread_id] + state->w0[thread_id]; // why w0, not w4? Is this a TYPO?
+    uint32_t rnd_uint = state->d[thread_id] + state->w4[thread_id];
 
     // convert to float; see curand_uniform.h
     return _curand_uniform(rnd_uint);
