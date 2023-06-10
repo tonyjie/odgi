@@ -714,6 +714,11 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     const uint64_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
+
+#define STEP_DECREASE_FACTOR 1.75
+    // block_nbr = block_nbr / STEP_DECREASE_FACTOR; but note the type conversion
+    block_nbr = uint64_t(double(block_nbr) / STEP_DECREASE_FACTOR);   
+
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
