@@ -451,7 +451,9 @@ namespace odgi {
                                     const bool &snapshot,
                                     const std::string &snapshot_prefix,
                                     std::vector<std::atomic<double>> &X,
-                                    std::vector<std::atomic<double>> &Y) {
+                                    std::vector<std::atomic<double>> &Y,
+                                    uint64_t &gpu_data_reuse_factor,
+                                    double &gpu_step_decrease_factor) {
 
             cuda::layout_config_t config;
             config.iter_max = iter_max;
@@ -465,6 +467,8 @@ namespace odgi {
             config.space_max = uint32_t(space_max);
             config.space_quantization_step = uint32_t(space_quantization_step);
             config.nthreads = nthreads;
+            config.gpu_data_reuse_factor = gpu_data_reuse_factor;
+            config.gpu_step_decrease_factor = gpu_step_decrease_factor;
 
             cuda::cuda_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y);
             return;

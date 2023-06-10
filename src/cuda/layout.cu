@@ -287,7 +287,9 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
                    n2_pos_in_path, n2_id, n2_offset, 
                    eta, node_data);
 
-#define UPDATE_TIMES 2
+// #define UPDATE_TIMES 2
+    uint64_t UPDATE_TIMES = config.gpu_data_reuse_factor;
+
     // Data Reuse for the non-cooling iteration
     if (!cooling[threadIdx.x / 32]) {
         // Shuffle and Update (DATA_REUSE_TIMES = UPDATE_TIMES - 1) times (UPDATE_TIMES is the total update times when calling `cuda_device_layout` once)
@@ -560,6 +562,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto start = std::chrono::high_resolution_clock::now();
 #endif
 
+// #define STEP_DECREASE_FACTOR 1.75
+    double STEP_DECREASE_FACTOR = config.gpu_step_decrease_factor;
 
     std::cout << "Hello world from CUDA host" << std::endl;
     std::cout << "iter_max: " << config.iter_max << std::endl;
@@ -567,6 +571,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "min_term_updates: " << config.min_term_updates << std::endl;
     std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
     std::cout << "theta: " << config.theta << std::endl;
+
+    std::cout << "===== GPU Data Reuse Parameters =====" << std::endl;
+    std::cout << "gpu_data_reuse_factor: " << config.gpu_data_reuse_factor << "\t" << "gpu_step_decrease_factor: " << config.gpu_step_decrease_factor << std::endl;
+
 
     // create eta array
     double *etas;
@@ -715,7 +723,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     const uint64_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
 
-#define STEP_DECREASE_FACTOR 1.75
     // block_nbr = block_nbr / STEP_DECREASE_FACTOR; but note the type conversion
     block_nbr = uint64_t(double(block_nbr) / STEP_DECREASE_FACTOR);   
 
