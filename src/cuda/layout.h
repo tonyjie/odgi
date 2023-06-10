@@ -76,6 +76,8 @@ struct layout_config_t {
     uint32_t space_max;
     uint32_t space_quantization_step;
     int nthreads;
+    uint64_t gpu_data_reuse_factor;
+    double gpu_step_decrease_factor;
 };
 
 

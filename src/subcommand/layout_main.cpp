@@ -87,6 +87,16 @@ int main_layout(int argc, char **argv) {
                                        {'t', "threads"});
     args::Group gpu_opts(parser, "[ GPU ]");
     args::Flag gpu_compute(gpu_opts, "gpu", "Enable computation with GPU.", {"gpu"});
+    // data-reuse options
+    // 1. data-reuse-factor
+    args::ValueFlag<uint64_t> g_data_reuse_factor(gpu_opts, "N",
+                                             "Data reuse factor (default: 1), which is not applying data-reuse.",
+                                             {"data-reuse"});
+    // 2. step-decrease-factor
+    args::ValueFlag<double> g_step_decrease_factor(gpu_opts, "N",
+                                          "The step decreasing factor (default: 1.0).",
+                                          {"step-decrease"});
+
     args::Group processing_info_opts(parser, "[ Processsing Information ]");
     args::Flag progress(processing_info_opts, "progress", "Write the current progress to stderr.", {'P', "progress"});
     args::Group program_info_opts(parser, "[ Program Information ]");
@@ -262,6 +272,10 @@ int main_layout(int argc, char **argv) {
     path_sgd_zipf_space_max = args::get(p_sgd_zipf_space_max) ? std::min(path_sgd_zipf_space, args::get(p_sgd_zipf_space_max)) : 1000;
     path_sgd_zipf_space_quantization_step = args::get(p_sgd_zipf_space_quantization_step) ? std::max((uint64_t)2, args::get(p_sgd_zipf_space_quantization_step)) : 100;
 
+    // data-reuse parameters
+    uint64_t gpu_data_reuse_factor = g_data_reuse_factor ? args::get(g_data_reuse_factor) : 1;
+    double gpu_step_decrease_factor = g_step_decrease_factor ? args::get(g_step_decrease_factor) : 1.0;
+
     std::vector<std::atomic<double>> graph_X(graph.get_node_count() * 2);  // Graph's X coordinates for node+ and node-
     std::vector<std::atomic<double>> graph_Y(graph.get_node_count() * 2);  // Graph's Y coordinates for node+ and node-
 
@@ -350,7 +364,9 @@ int main_layout(int argc, char **argv) {
             snapshot,
             snapshot_prefix,
             graph_X,
-            graph_Y
+            graph_Y, 
+            gpu_data_reuse_factor,
+            gpu_step_decrease_factor
             );
     } else {
         algorithms::path_linear_sgd_layout(
