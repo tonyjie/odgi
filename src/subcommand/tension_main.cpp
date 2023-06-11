@@ -359,17 +359,19 @@ int main_tension(int argc, char **argv) {
 //                      int thread_count,
 //                      double &stress_result) {
 
+
+
+// /*
     std::vector<odgi::path_handle_t> paths;
     graph.for_each_path_handle([&] (const odgi::path_handle_t &p) {
         paths.push_back(p);
     });
 
-    // std::cout << "TEST\tPANGENOME\tMODE" << std::endl;
 
     double sum_stress_squared_dist_weight = 0;
     uint32_t num_steps_iterated = 0;
 
-    #pragma omp parallel for schedule(static, 1) num_threads(thread_count)
+    #pragma omp parallel for schedule(static, 1) num_threads(thread_count) reduction(+:sum_stress_squared_dist_weight, num_steps_iterated)
     for (auto p: paths) {
         double path_layout_dist;
         uint64_t path_nuc_dist;
@@ -452,6 +454,7 @@ int main_tension(int argc, char **argv) {
     double stress_result = sum_stress_squared_dist_weight / (double)num_steps_iterated;
 
 	std::cout << "stress: " << stress_result << std::endl;
+// */
 
 // }	
 
