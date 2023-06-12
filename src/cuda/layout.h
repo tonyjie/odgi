@@ -53,6 +53,7 @@ struct path_data_t {
 
 #define SM_COUNT 84
 #define BLOCK_SIZE 1024
+#define WARP_SIZE 32
 struct curandStateXORWOWCoalesced_t {
     unsigned int d[BLOCK_SIZE];
     unsigned int w0[BLOCK_SIZE];
