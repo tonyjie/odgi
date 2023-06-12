@@ -176,22 +176,22 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(smid < 84);
     curandStateCoalesced_t *thread_rnd_state = &rnd_state[smid];
 
-    __shared__ bool cooling[32];
-    if (threadIdx.x % 32 == 1) {
-        cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5);
+    __shared__ bool cooling[BLOCK_SIZE / WARP_SIZE]; // This [32] is actually BLOCK_SIZE/WARP_SIZE = 1024/32 = 32. Not good to hardcode. 
+    if (threadIdx.x % WARP_SIZE == 1) {
+        cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5);
     }
 
     // select path
-    __shared__ uint32_t first_step_idx[32];
-    if (threadIdx.x % 32 == 0) {
+    __shared__ uint32_t first_step_idx[BLOCK_SIZE / WARP_SIZE]; // BLOCK_SIZE/WARP_SIZE = 1024/32 = 32
+    if (threadIdx.x % WARP_SIZE == 0) {
         // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
-        assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
+        first_step_idx[threadIdx.x / WARP_SIZE] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+        assert(first_step_idx[threadIdx.x / WARP_SIZE] < path_data.total_path_steps);
     }
     __syncwarp();
 
     // find path of step of specific thread with LUT (threads in one warp pick the same path `p`)
-    uint32_t step_idx = first_step_idx[threadIdx.x / 32];
+    uint32_t step_idx = first_step_idx[threadIdx.x / WARP_SIZE];
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
     path_t p = path_data.paths[path_idx];
 
@@ -205,7 +205,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
-    if (cooling[threadIdx.x / 32]) {
+    if (cooling[threadIdx.x / WARP_SIZE]) {
         bool backward;
         uint32_t jump_space;
         if (s1_idx > 0 && (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
@@ -291,11 +291,11 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     uint64_t UPDATE_TIMES = config.gpu_data_reuse_factor;
 
     // Data Reuse for the non-cooling iteration
-    if (!cooling[threadIdx.x / 32]) {
+    if (!cooling[threadIdx.x / WARP_SIZE]) {
         // Shuffle and Update (DATA_REUSE_TIMES = UPDATE_TIMES - 1) times (UPDATE_TIMES is the total update times when calling `cuda_device_layout` once)
         for (int i = 0; i < UPDATE_TIMES - 1; i++) {
             // Shuffle the step data within a warp
-            int shuffle_laneId = curand_coalesced(thread_rnd_state, threadIdx.x) % 32;
+            int shuffle_laneId = curand_coalesced(thread_rnd_state, threadIdx.x) % WARP_SIZE;
             uint64_t n2_pos_in_path_tmp = __shfl_sync(0xffffffff, n2_pos_in_path, shuffle_laneId);
             uint32_t n2_id_tmp = __shfl_sync(0xffffffff, n2_id, shuffle_laneId);
             int n2_offset_tmp = __shfl_sync(0xffffffff, n2_offset, shuffle_laneId);
