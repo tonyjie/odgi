@@ -103,6 +103,21 @@ PYBIND11_MODULE(odgi_ffi, m)
               }
               odgi_generate_layout_file(graph, x_final, y_final, layout_file_name);
           });
+    m.def("odgi_get_init_pos_numpy", 
+            [](const ograph_t graph) {
+                std::pair<double*, double*> coords = odgi_get_init_pos(graph);
+                double* graph_x = coords.first;
+                double* graph_y = coords.second;
+                // pack into py::array_t
+                py::array_t<double> x_np = py::array_t<double>(odgi_get_node_count(graph)*2, graph_x);
+                py::array_t<double> y_np = py::array_t<double>(odgi_get_node_count(graph)*2, graph_y);
+                py::tuple ret_tuple = py::make_tuple(x_np, y_np);
+                // delete
+                delete graph_x;
+                delete graph_y;
+
+                return ret_tuple;
+            });
     m.def("odgi_get_random_node_numpy_batch",
           [](oRndNodeGenerator RNoG, int batch_size, bool cooling) {
               int64_t *i = new int64_t[batch_size];

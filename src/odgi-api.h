@@ -122,6 +122,7 @@ const uint32_t odgi_RNP_get_vis_p_n0(python_extension::random_nodes_pack_t p);
 const uint32_t odgi_RNP_get_vis_p_n1(python_extension::random_nodes_pack_t p);
 const float odgi_RNP_get_distance(python_extension::random_nodes_pack_t p);
 
+std::pair<double*, double*> odgi_get_init_pos(const ograph_t graph);
 const void odgi_generate_layout_file(const ograph_t graph, std::vector<double> x_coords, std::vector<double> y_coords, string layout_file_name);
 
 const std::string odgi_get_path_name(const ograph_t graph, const path_handle_i ipath);

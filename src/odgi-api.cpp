@@ -341,6 +341,34 @@ const float odgi_RNP_get_distance(python_extension::random_nodes_pack_t p) {
     return p.distance;
 }
 
+
+std::pair<double*, double*> odgi_get_init_pos(const ograph_t graph) {
+
+    // std::vector<std::atomic<double>> graph_X(graph.get_node_count() * 2);  // Graph's X coordinates for node+ and node-
+    // std::vector<std::atomic<double>> graph_Y(graph.get_node_count() * 2);  // Graph's Y coordinates for node+ and node-
+    size_t node_count = graph->get_node_count();
+
+    std::random_device dev;
+    std::mt19937 rng(dev());
+    std::normal_distribution<double> gaussian_noise(0,  sqrt(node_count * 2));
+
+    double *graph_X = new double[node_count * 2];
+    double *graph_Y = new double[node_count * 2];
+
+    uint64_t len = 0;
+    graph->for_each_handle([&](const handle_t &h) {
+        uint64_t pos = 2 * number_bool_packing::unpack_number(h);
+        graph_X[pos] = len;
+        graph_Y[pos] = gaussian_noise(rng);
+        len += (as_graph_t(graph))->get_length(h);
+        graph_X[pos + 1] = len;
+        graph_Y[pos + 1] = gaussian_noise(rng);
+        }
+        );
+
+    return std::make_pair(graph_X, graph_Y);
+}
+
 const void odgi_generate_layout_file(const ograph_t graph, std::vector<double> x_coords, std::vector<double> y_coords, string layout_file_name) {
     python_extension::generate_layout_file(*graph, x_coords, y_coords, layout_file_name);
 }
