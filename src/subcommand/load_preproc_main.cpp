@@ -6,7 +6,7 @@
 #include "utils.hpp"
 
 // #define debug_load_preproc
-// #define debug_show_step_count
+#define debug_show_step_count
 namespace odgi {
 
 using namespace odgi::subcommand;
@@ -141,8 +141,14 @@ int main_load_preproc(int argc, char **argv) {
         cerr << "path_count_idx: " << path_count_idx << "; path: " << path_name << "; step_count: " << step_count << endl;
 #endif
 
-        int32_t positions[step_count * 2];
-        int32_t vis_id[step_count * 2];
+        // int32_t positions[step_count * 2];
+        // int32_t vis_id[step_count * 2];
+        int32_t* positions = new int32_t[step_count * 2];
+        int32_t* vis_id = new int32_t[step_count * 2];
+
+        // show the size of vis_id
+        // cerr << "vis_id size: " << sizeof(vis_id) << endl;
+        // cerr << "positions size: " << sizeof(positions) << endl;
 
         int32_t idx = 0;
         int32_t current_pos = 0;
@@ -154,7 +160,7 @@ int main_load_preproc(int argc, char **argv) {
             bool is_rev = graph.get_is_reverse(handle);
             uint32_t len = graph.get_length(handle);
 #ifdef debug_load_preproc
-            cout << "node_id: " << node_id << " is_rev: " << is_rev << " len: " << len << endl;
+            cerr << "node_id: " << node_id << " is_rev: " << is_rev << " len: " << len << endl;
 #endif
             // vis_id
             vis_id[idx] = (node_id - 1) * 2;
@@ -182,6 +188,9 @@ int main_load_preproc(int argc, char **argv) {
             f_vis_id << vis_id[i] << " ";
         }
         f_vis_id << endl;
+
+        delete[] positions;
+        delete[] vis_id;
     });
 
     // get node_length
