@@ -28,7 +28,8 @@ int main_load_preproc(int argc, char **argv) {
     args::Group files_io_opts(parser, "[ Files IO ]");
     args::ValueFlag<std::string> pos_out_file(files_io_opts, "FILE", "Write the positions array of each path to this FILE (.txt).", {'p', "pos"});
     args::ValueFlag<std::string> vis_id_out_file(files_io_opts, "FILE", "Write the vis_id array of each path to this FILE (.txt).", {'v', "vis_id"});
-    args::ValueFlag<std::string> node_length_out_file(files_io_opts, "FILE", "Write the node_length array to this FILE (.txt).", {'n', "node_length"});
+    // args::ValueFlag<std::string> node_length_out_file(files_io_opts, "FILE", "Write the node_length array to this FILE (.txt).", {'n', "node_length"}); # don't need it for Pytorch implementation
+    args::ValueFlag<std::string> init_layout_out_file(files_io_opts, "FILE", "Write the initial layout coordinates of all the visualization nodes to this FILE (.txt).", {"init_layout"});
     args::ValueFlag<std::string> config_out_file(files_io_opts, "FILE", "Write the configurations of the algorithm to this FILE (.txt), including the learning rate settings (etas)", {'c', "config"});
     args::ValueFlag<std::string> p_sgd_in_file(files_io_opts, "FILE",
                                                "Specify a line separated list of paths to sample from for the on the fly term generation process in the path guided 2D SGD (default: sample from all paths).",
@@ -96,9 +97,16 @@ int main_load_preproc(int argc, char **argv) {
         return 1;
     }
 
-    if (!node_length_out_file) {
+    // if (!node_length_out_file) {
+    //     std::cerr
+    //         << "[odgi::load-preproc] error: Please specify an output file to write the node_length array via -n=[FILE], --node_length=[FILE]."
+    //         << std::endl;
+    //     return 1;
+    // }
+
+    if (!init_layout_out_file) {
         std::cerr
-            << "[odgi::load-preproc] error: Please specify an output file to write the node_length array via -n=[FILE], --node_length=[FILE]."
+            << "[odgi::load-preproc] error: Please specify an output file to write the node_length array via --init_layout=[FILE]."
             << std::endl;
         return 1;
     }
@@ -118,8 +126,11 @@ int main_load_preproc(int argc, char **argv) {
     auto& vis_id_out_f = args::get(vis_id_out_file);
     std::ofstream f_vis_id(vis_id_out_f.c_str());
 
-    auto& node_length_out_f = args::get(node_length_out_file);
-    std::ofstream f_node_length(node_length_out_f.c_str());
+    // auto& node_length_out_f = args::get(node_length_out_file);
+    // std::ofstream f_node_length(node_length_out_f.c_str());
+
+    auto& init_layout_out_f = args::get(init_layout_out_file);
+    std::ofstream f_init_layout(init_layout_out_f.c_str());
 
     auto& config_out_f = args::get(config_out_file);
     std::ofstream f_config(config_out_f.c_str());
@@ -194,12 +205,44 @@ int main_load_preproc(int argc, char **argv) {
     });
 
     // get node_length
-    f_node_length << graph.get_node_count() << endl;
-    graph.for_each_handle([&](const handle_t &handle) {
-        uint32_t len = graph.get_length(handle);
-        f_node_length << len << " ";
-    });
-    f_node_length << endl;
+    // f_node_length << graph.get_node_count() << endl;
+    // graph.for_each_handle([&](const handle_t &handle) {
+    //     uint32_t len = graph.get_length(handle);
+    //     f_node_length << len << " ";
+    // });
+    // f_node_length << endl;
+
+    // get init_layout
+    size_t node_count = graph.get_node_count();
+
+    std::random_device dev;
+    std::mt19937 rng(dev());
+    std::normal_distribution<double> gaussian_noise(0,  sqrt(node_count * 2));
+
+    double *graph_X = new double[node_count * 2];
+    double *graph_Y = new double[node_count * 2];
+
+    uint64_t len = 0;
+    graph.for_each_handle([&](const handle_t &h) {
+        uint64_t pos = 2 * number_bool_packing::unpack_number(h);
+        graph_X[pos] = len;
+        graph_Y[pos] = gaussian_noise(rng);
+        len += graph.get_length(h);
+        graph_X[pos + 1] = len;
+        graph_Y[pos + 1] = gaussian_noise(rng);
+        }
+    );
+    // write to f_init_layout: first line is graph_X; second line is graph_Y
+    for (int32_t i = 0; i < node_count * 2; i++) {
+        f_init_layout << graph_X[i] << " ";
+    }
+    f_init_layout << endl;
+    for (int32_t i = 0; i < node_count * 2; i++) {
+        f_init_layout << graph_Y[i] << " ";
+    }
+    f_init_layout << endl;
+    
+
 
     // get configs
     std::vector<path_handle_t> path_sgd_use_paths;
@@ -258,8 +301,10 @@ int main_load_preproc(int argc, char **argv) {
     min_term_updates = 10 * sum_path_step_count;
 
     // write to f_config
-    f_config << min_term_updates << endl;
-    f_config << iter_max + 1 << endl;
+    // f_config << min_term_updates << endl;
+    // f_config << iter_max + 1 << endl;
+    // write the total number of nodes in the graph to the config file
+    f_config << graph.get_node_count() << endl;
     for (int32_t i = 0; i < etas.size(); i++) {
         f_config << etas[i] << " ";
     }
@@ -267,7 +312,8 @@ int main_load_preproc(int argc, char **argv) {
     // close ofstream
     f_pos.close();
     f_vis_id.close();
-    f_node_length.close();
+    // f_node_length.close();
+    f_init_layout.close();
     f_config.close();
 
 
