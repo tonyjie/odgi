@@ -54,7 +54,18 @@ struct path_data_t {
     //path_element_t *element_array;
 };
 
+#define SM_COUNT 84
 #define BLOCK_SIZE 1024
+struct curandStateXORWOWCoalesced_t {
+    unsigned int d[BLOCK_SIZE];
+    unsigned int w0[BLOCK_SIZE];
+    unsigned int w1[BLOCK_SIZE];
+    unsigned int w2[BLOCK_SIZE];
+    unsigned int w3[BLOCK_SIZE];
+    unsigned int w4[BLOCK_SIZE];
+};
+typedef struct curandStateXORWOWCoalesced_t curandStateCoalesced_t;
+
 
 struct layout_config_t {
     uint64_t iter_max;
