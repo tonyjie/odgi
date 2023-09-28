@@ -59,12 +59,22 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(smid < 84);
     curandState *thread_rnd_state = &rnd_state[smid * 1024 + threadIdx.x];
 
+    __shared__ bool cooling[32];
+    if (threadIdx.x % 32 == 1) {
+        cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) <= 0.5);
+    }
+
     // select path
-    // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(path_data.total_path_steps)));
-    assert(step_idx < path_data.total_path_steps);
+    __shared__ uint32_t first_step_idx[32];
+    if (threadIdx.x % 32 == 0) {
+        // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
+        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(path_data.total_path_steps)));
+        assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
+    }
+    __syncwarp();
 
     // find path of step of specific thread with LUT (threads in warp pick same path)
+    uint32_t step_idx = first_step_idx[threadIdx.x / 32];
     uint32_t path_idx = pidx_array[step_idx];
 
 
@@ -79,39 +89,42 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
-    bool cooling = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) <= 0.5);
-    if (cooling) {
+    if (cooling[threadIdx.x / 32]) {
+        bool backward;
+        uint32_t jump_space;
         if (s1_idx > 0 && (curand_uniform(thread_rnd_state) <= 0.5) || s1_idx == p.step_count-1) {
             // go backward
-            uint32_t jump_space = min(config.space, s1_idx);
-            uint32_t space = jump_space;
-            if (jump_space > config.space_max) {
-                space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
-            }
+            backward = true;
+            jump_space = min(config.space, s1_idx);
+        } else {
+            // go forward
+            backward = false;
+            jump_space = min(config.space, p.step_count - s1_idx - 1);
+        }
+        uint32_t space = jump_space;
+        if (jump_space > config.space_max) {
+            space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
+        }
 
-            uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
+        uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
+
+        /*
+        if (backward) {
             if (!(z_i <= s1_idx)) {
                 printf("Error (thread %i): %u - %u\n", threadIdx.x, s1_idx, z_i);
                 printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, zetas[space]);
             }
             assert(z_i <= s1_idx);
-            s2_idx = s1_idx - z_i;
         } else {
-            // go forward
-            uint32_t jump_space = min(config.space, p.step_count - s1_idx - 1);
-            uint32_t space = jump_space;
-            if (jump_space > config.space_max) {
-                space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
-            }
-
-            uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
             if (!(z_i <= p.step_count - s1_idx - 1)) {
                 printf("Error (thread %i): %u + %u, step_count %u\n", threadIdx.x, s1_idx, z_i, p.step_count);
                 printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, zetas[space]);
             }
             assert(s1_idx + z_i < p.step_count);
-            s2_idx = s1_idx + z_i;
         }
+        */
+
+        s2_idx = backward? s1_idx - z_i: s1_idx + z_i;
     } else {
         do {
             s2_idx = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(p.step_count)));
