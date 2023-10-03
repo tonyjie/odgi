@@ -565,7 +565,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 // #define STEP_DECREASE_FACTOR 1.75
     double STEP_DECREASE_FACTOR = config.gpu_step_decrease_factor;
 
-    std::cout << "Hello world from CUDA host" << std::endl;
+    // std::cout << "Hello world from CUDA host" << std::endl;
+    std::cout << "===== GPU Layout Parameters =====" << std::endl;
     std::cout << "iter_max: " << config.iter_max << std::endl;
     std::cout << "first_cooling_iteration: " << config.first_cooling_iteration << std::endl;
     std::cout << "min_term_updates: " << config.min_term_updates << std::endl;
@@ -717,7 +718,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto start_compute = std::chrono::high_resolution_clock::now();
 #define USE_GPU
 #ifdef USE_GPU
-    std::cout << "cuda gpu layout" << std::endl;
+    // std::cout << "cuda gpu layout" << std::endl;
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 
     const uint64_t block_size = BLOCK_SIZE;
@@ -730,19 +731,19 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
     cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     cuda_device_init<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);
     tmp_error = cudaDeviceSynchronize();
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     cudaFree(rnd_state_tmp);
 
 
     for (int iter = 0; iter < config.iter_max; iter++) {
         cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
         cudaError_t error = cudaDeviceSynchronize();
-        std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+        // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
 
 #else
@@ -750,7 +751,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
-    std::cout << "CUDA layout compute took " << duration_compute_ms << "ms" << std::endl;
+    std::cout << "=====================" << std::endl;
+    std::cout << "Kernel run time: " << duration_compute_ms << "ms" << std::endl;
 
 
 
@@ -787,7 +789,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #ifdef cuda_layout_profiling
     auto end = std::chrono::high_resolution_clock::now();
     uint32_t duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "CUDA layout took " << duration_ms << "ms" << std::endl;
+    std::cout << "Kernel + Pre/Post Processing: " << duration_ms << "ms" << std::endl;
 #endif
 
     return;
