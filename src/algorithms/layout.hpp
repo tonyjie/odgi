@@ -20,6 +20,8 @@ void to_tsv(std::ostream &out,
 
 union conv_t { uint64_t i; double d; };
 
+double coord_dist(const xy_d_t, const xy_d_t);
+
 class Layout {
     sdsl::enc_vector<> xy;
     double min_value = std::numeric_limits<double>::max();

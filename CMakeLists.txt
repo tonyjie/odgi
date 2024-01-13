@@ -547,6 +547,7 @@ add_library(odgi_objs OBJECT
   ${CMAKE_SOURCE_DIR}/src/subcommand/panpos_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/server_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/version_main.cpp
+  ${CMAKE_SOURCE_DIR}/src/subcommand/tension_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/untangle_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/tips_main.cpp
   ${CMAKE_SOURCE_DIR}/src/subcommand/stepindex_main.cpp
