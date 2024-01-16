@@ -7,6 +7,7 @@
 
 // #define debug_load_preproc
 #define debug_show_step_count
+#define debug_gen_csv_array
 namespace odgi {
 
 using namespace odgi::subcommand;
@@ -28,6 +29,7 @@ int main_load_preproc(int argc, char **argv) {
     args::Group files_io_opts(parser, "[ Files IO ]");
     args::ValueFlag<std::string> pos_out_file(files_io_opts, "FILE", "Write the positions array of each path to this FILE (.txt).", {'p', "pos"});
     args::ValueFlag<std::string> vis_id_out_file(files_io_opts, "FILE", "Write the vis_id array of each path to this FILE (.txt).", {'v', "vis_id"});
+    args::ValueFlag<std::string> vis_dist_csv_file(files_io_opts, "FILE", "Write the vis_dist array to this FILE (.csv).", {'d', "vis_dist_csv"});
     // args::ValueFlag<std::string> node_length_out_file(files_io_opts, "FILE", "Write the node_length array to this FILE (.txt).", {'n', "node_length"}); # don't need it for Pytorch implementation
     args::ValueFlag<std::string> init_layout_out_file(files_io_opts, "FILE", "Write the initial layout coordinates of all the visualization nodes to this FILE (.txt).", {"init_layout"});
     args::ValueFlag<std::string> config_out_file(files_io_opts, "FILE", "Write the configurations of the algorithm to this FILE (.txt), including the learning rate settings (etas)", {'c', "config"});
@@ -97,6 +99,14 @@ int main_load_preproc(int argc, char **argv) {
         return 1;
     }
 
+    if (!vis_dist_csv_file) {
+        std::cerr
+            << "[odgi::load-preproc] error: Please specify an output file to write the vis_id array of each path via -d=[FILE], --vis_dist_csv=[FILE]."
+            << std::endl;
+        return 1;
+    }
+
+
     // if (!node_length_out_file) {
     //     std::cerr
     //         << "[odgi::load-preproc] error: Please specify an output file to write the node_length array via -n=[FILE], --node_length=[FILE]."
@@ -126,6 +136,9 @@ int main_load_preproc(int argc, char **argv) {
     auto& vis_id_out_f = args::get(vis_id_out_file);
     std::ofstream f_vis_id(vis_id_out_f.c_str());
 
+    auto& vis_dist_csv_out_f = args::get(vis_dist_csv_file);
+    std::ofstream f_vis_dist_csv(vis_dist_csv_out_f.c_str());
+
     // auto& node_length_out_f = args::get(node_length_out_file);
     // std::ofstream f_node_length(node_length_out_f.c_str());
 
@@ -134,6 +147,108 @@ int main_load_preproc(int argc, char **argv) {
 
     auto& config_out_f = args::get(config_out_file);
     std::ofstream f_config(config_out_f.c_str());
+
+#ifdef debug_gen_csv_array
+    // here we give each visualization node a unique ID. 
+    // 2 visualization nodes for each node would have distance of the corresponding node length
+    // 2 visualization nodes for each edge would have distance of 0.01 (small value)
+    // the other pair of visualization nodes are not directly connected
+
+    // get node_length
+    uint64_t node_cnt = graph.get_node_count();
+    // std::cout << node_cnt << endl;
+    graph.for_each_handle([&](const handle_t &handle) {
+        uint32_t len = graph.get_length(handle);
+        uint64_t node_id = graph.get_id(handle);
+        
+        // std::cout << "node " << node_id << ": " << len << std::endl;
+    });
+
+    uint64_t vis_node_count = node_cnt * 2;
+    // generate a matrix of size vis_node_count * vis_node_count, initialized with 0. 
+    // use std::vector
+    // vis_node distance matrix
+    std::vector<std::vector<double>> vis_node_dist;
+    vis_node_dist.resize(vis_node_count);
+    for (int32_t i = 0; i < vis_node_count; i++) {
+        vis_node_dist[i].resize(vis_node_count);
+    }
+    // initialize the matrix with 0
+    for (int32_t i = 0; i < vis_node_count; i++) {
+        for (int32_t j = 0; j < vis_node_count; j++) {
+            vis_node_dist[i][j] = 0;
+        }
+    }
+    
+    // fill in with the node_length
+    graph.for_each_handle([&](const handle_t &handle) {
+        uint32_t len = graph.get_length(handle);
+        uint64_t node_id = graph.get_id(handle);
+        uint64_t vis_id = (node_id - 1) * 2;
+        vis_node_dist[vis_id][vis_id + 1] = len;
+        vis_node_dist[vis_id + 1][vis_id] = len;
+    });
+
+
+    // fill in with the connected vis node: the endpoint of prev_node to the startpoint of current_node are connected
+    // iterate through steps in the path
+    graph.for_each_path_handle([&](const path_handle_t &path) {
+        bool first_step = true;
+        uint64_t prev_vis_id_end; // the endpoint of prev_node
+        uint64_t curr_vis_id_start; // the startpoint of current_node
+        graph.for_each_step_in_path(path, [&](const step_handle_t &step) {
+            handle_t handle = graph.get_handle_of_step(step);
+            uint64_t node_id = graph.get_id(handle);
+            bool is_rev = graph.get_is_reverse(handle);
+            uint32_t len = graph.get_length(handle);
+            uint64_t vis_id = (node_id - 1) * 2; // startpoint of the current node, if is_rev = False
+            uint64_t vis_id_rev = (node_id - 1) * 2 + 1; // startpoint of the current node, if is_rev = True
+            curr_vis_id_start = is_rev ? vis_id_rev : vis_id; // startpoint of current_node
+
+            if (!first_step) { // skip the first_step in the path
+                vis_node_dist[prev_vis_id_end][curr_vis_id_start] = 0.01;
+                vis_node_dist[curr_vis_id_start][prev_vis_id_end] = 0.01;
+                
+                // print the prev_vis_id_end and curr_vis_id_start
+                // std::cout << "prev_vis_id_end: " << prev_vis_id_end << "; curr_vis_id_start: " << curr_vis_id_start << std::endl;
+            }
+            prev_vis_id_end = is_rev ? vis_id : vis_id_rev; // update the endpoint of prev_node
+            first_step = false;
+        });
+    });
+
+    // print out the whole matrix
+    // for (int32_t i = 0; i < vis_node_count; i++) {
+    //     for (int32_t j = 0; j < vis_node_count; j++) {
+    //         std::cout << vis_node_dist[i][j] << " ";
+    //     }
+    //     std::cout << std::endl;
+    // }
+
+    // generate CSV array
+    // first row:   , 0, 1, 2, ..., vis_node_count - 1
+    // second row: 0, vis_node_dist[0][0], vis_node_dist[0][1], ..., vis_node_dist[0][vis_node_count - 1]
+    // third row:  1, vis_node_dist[1][0], vis_node_dist[1][1], ..., vis_node_dist[1][vis_node_count - 1]
+    // ...
+    // last row:   vis_node_count - 1, vis_node_dist[vis_node_count - 1][0], vis_node_dist[vis_node_count - 1][1], ..., vis_node_dist[vis_node_count - 1][vis_node_count - 1]
+
+    // first row
+    f_vis_dist_csv << std::setw(6) << " ";
+    for (int32_t i = 0; i < vis_node_count; i++) {
+        // fix the printed interval of each column
+        f_vis_dist_csv << ", " << std::setw(6) << i;
+    }
+    f_vis_dist_csv << endl;
+    // begin with second row
+    for (int32_t i = 0; i < vis_node_count; i++) {
+        f_vis_dist_csv << std::setw(6) << i;
+        for (int32_t j = 0; j < vis_node_count; j++) {
+            f_vis_dist_csv << ", " << std::setw(6) << vis_node_dist[i][j];
+        }
+        f_vis_dist_csv << endl;
+    }
+
+#endif
 
     // get positions & vis_id
     // iterate through paths
