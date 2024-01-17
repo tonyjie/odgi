@@ -654,6 +654,9 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     for (int iter = 0; iter < config.iter_max; iter++) {
         cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
+        // add a metric computing function here to print out the metric interactively during the layout process
+        // compute_metric(X, Y)
+
         cudaError_t error = cudaDeviceSynchronize();
         std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
@@ -663,7 +666,9 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
-    std::cout << "CUDA layout compute took " << duration_compute_ms << "ms" << std::endl;
+    // std::cout << "CUDA layout compute took " << duration_compute_ms << "ms" << std::endl;
+    // in seconds
+    std::cout << "CUDA layout kernel time: " << duration_compute_ms / 1000.0 << "s" << std::endl;
 
 
 
@@ -700,7 +705,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #ifdef cuda_layout_profiling
     auto end = std::chrono::high_resolution_clock::now();
     uint32_t duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "CUDA layout took " << duration_ms << "ms" << std::endl;
+    std::cout << "Entire Layout function time: " << duration_ms / 1000.0 << "s" << std::endl;
 #endif
 
     return;
