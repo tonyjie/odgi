@@ -2,8 +2,64 @@
 #include <cuda.h>
 #include <assert.h>
 
+#define METRIC
 
 namespace cuda {
+
+// compute the metric "node stress" and print out during each iteration. 
+// help to guide the converging process
+#ifdef METRIC
+
+__global__ void cuda_compute_metric(float *stress_partial_sum, cuda::node_data_t node_data, uint32_t node_count) {
+    /*
+    stress_partial_sum includes the partial sum of the stress from each block. stress_partial_sum.size() = numBlocks
+    This kernel function first computes the stress of each node, and then computes the partial sum of the stress of each block with a strided reduction algorithm. 
+    */
+    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    
+    // 1. compute stress of each node
+    float node_stress = 0.0;
+    float dist_layout = 0.0;
+    uint32_t dist_nuc = 0;
+    if (tid < node_count) {
+        dist_nuc = node_data.nodes[tid].seq_length;
+        // dist_layout = sqrt( (x_start - x_end)^2 + (y_start - y_end)^2 )
+        dist_layout = sqrt( pow(node_data.nodes[tid].coords[0] - node_data.nodes[tid].coords[2], 2) + \
+                                pow(node_data.nodes[tid].coords[1] - node_data.nodes[tid].coords[3], 2) );
+        node_stress = pow( (dist_layout - dist_nuc) / dist_nuc, 2);
+    }
+    __syncthreads();
+
+    // // print out each code's stress
+    // if (threadIdx.x == 0) {
+    //     printf("tid: %d, dist_nuc: %d, dist_layout: %f, node_stress: %f\n", tid, dist_nuc, dist_layout, node_stress);
+    // }
+
+    // 2. Store the stress of each node in the shared memory
+    extern __shared__ float sdata[];
+    sdata[threadIdx.x] = node_stress;
+    __syncthreads();
+
+    // 3. Reduction in the shared memory
+    int i = blockDim.x / 2;
+    while (i != 0) {
+        if (threadIdx.x < i) {
+            sdata[threadIdx.x] += sdata[threadIdx.x + i];
+        }
+        __syncthreads();
+        i /= 2;
+    }
+
+    // 4. Store the partial sum of the stress of each block in the global memory
+    if (threadIdx.x == 0) {
+        stress_partial_sum[blockIdx.x] = sdata[0];
+    }
+}
+
+
+
+#endif
 
 __global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoalesced_t *rnd_state) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -651,14 +707,36 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     cudaFree(rnd_state_tmp);
 
+#ifdef METRIC
+    int blockSize = 1024;
+    int sharedMemSize = blockSize * sizeof(float);
+    int numBlocks = (node_count + blockSize - 1) / blockSize;
+    // create StressPartialSum array
+    float *stress_partial_sum;
+    cudaMallocManaged(&stress_partial_sum, numBlocks * sizeof(float));
+#endif
 
     for (int iter = 0; iter < config.iter_max; iter++) {
         cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
         // add a metric computing function here to print out the metric interactively during the layout process
-        // compute_metric(X, Y)
-
+#ifdef METRIC        
+        cuda_compute_metric<<<numBlocks, blockSize, sharedMemSize>>>(stress_partial_sum, node_data, node_count);
         cudaError_t error = cudaDeviceSynchronize();
-        std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+        // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;        
+        // sum up the partial sum
+        float stress_sum = 0.0;
+        #pragma omp parallel for reduction(+:stress_sum)
+        for (int i = 0; i < numBlocks; i++) {
+            stress_sum += stress_partial_sum[i];
+            // std::cout << "stress_partial_sum[" << i << "]: " << stress_partial_sum[i] << std::endl;
+        }
+        // normalized by node_count
+        stress_sum /= node_count;
+        std::cout << "Iteration[" << iter << "] ";
+        std::cout << "Node Stress: " << stress_sum << std::endl;
+#endif
+        // cudaError_t error = cudaDeviceSynchronize();
+        // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
 
 #else
