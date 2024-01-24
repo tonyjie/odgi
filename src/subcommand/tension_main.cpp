@@ -30,6 +30,9 @@ int main_tension(int argc, char **argv) {
 	args::Group tension_opts(parser, "[ Tension Options ]");
 	// option to control if compute the new or old node-stress
 	args::Flag new_node_stress(tension_opts, "new-node-stress", "compute the new node-stress", {'n', "new-node-stress"});
+	// option to control if we want to compute the step-stress (only count each within-node distance, but iterate though path, then iterate through steps within path -- the same as old-node-stress)
+	args::Flag step_stress(tension_opts, "step-stress", "compute the step-stress", {'s', "step-stress"});
+
 	args::Group threading_opts(parser, "[ Threading ]");
 	args::ValueFlag<uint64_t> nthreads(parser, "N", "number of threads to use for parallel phases", {'t', "threads"});
 	args::Group processing_info_opts(parser, "[ Processing Information ]");
@@ -128,6 +131,49 @@ int main_tension(int argc, char **argv) {
 
 
 
+	else if (step_stress) {
+		// so-called "step-stress". Only consider the within-node distance.
+		// Only one difference compared to the above new node-stress. 
+		// 1. First iterate through each step (node) in the path, then iterate through paths. So there are some over-counting instead of iterate though all the nodes directly. 
+		// We want to check which difference (1) or (2) made the change on the results. 
+		cout << "compute the step-stress" << endl;
+
+		std::vector<odgi::path_handle_t> paths;
+		graph.for_each_path_handle([&] (const odgi::path_handle_t &p) {
+			paths.push_back(p);
+		});
+
+		double sum_stress_squared_dist_weight = 0;
+		uint32_t num_steps_iterated = 0;
+
+		#pragma omp parallel for schedule(static, 1) num_threads(thread_count) reduction(+:sum_stress_squared_dist_weight, num_steps_iterated)
+		for (auto p: paths) {
+			double path_layout_dist;
+			uint64_t path_nuc_dist;
+			graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
+				odgi::handle_t h = graph.get_handle_of_step(s);
+				odgi::algorithms::xy_d_t h_coords_start;
+				odgi::algorithms::xy_d_t h_coords_end;
+				// get the node nucleotide length
+				path_nuc_dist = graph.get_length(h);
+				// get the node layout distance
+				h_coords_start = layout.coords(h);
+				h_coords_end = layout.coords(graph.flip(h));
+				path_layout_dist = odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
+
+				sum_stress_squared_dist_weight += pow((((double)path_layout_dist - (double)path_nuc_dist) / (double)path_nuc_dist), 2); // weight = 1 / (d*d)
+
+				num_steps_iterated += 1;
+			});
+		}
+
+		double stress_result = sum_stress_squared_dist_weight / (double)num_steps_iterated;
+
+		std::cout << "stress: " << stress_result << std::endl;
+
+
+	}
+	
 	else {
 
 	// The original node-stress. There are two differences compared to the above new node-stress. 
