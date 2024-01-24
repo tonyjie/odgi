@@ -2,7 +2,7 @@
 #include <cuda.h>
 #include <assert.h>
 
-#define METRIC
+// #define METRIC
 
 namespace cuda {
 
@@ -718,10 +718,17 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     for (int iter = 0; iter < config.iter_max; iter++) {
         cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
+        cudaError_t error = cudaDeviceSynchronize();
+        if (error != cudaSuccess) {
+            std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+        } else {
+            std::cout << "Iteration[" << iter << "] ";
+        }
+        
         // add a metric computing function here to print out the metric interactively during the layout process
 #ifdef METRIC        
         cuda_compute_metric<<<numBlocks, blockSize, sharedMemSize>>>(stress_partial_sum, node_data, node_count);
-        cudaError_t error = cudaDeviceSynchronize();
+        // error = cudaDeviceSynchronize();
         // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;        
         // sum up the partial sum
         float stress_sum = 0.0;
@@ -732,9 +739,9 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         }
         // normalized by node_count
         stress_sum /= node_count;
-        std::cout << "Iteration[" << iter << "] ";
-        std::cout << "Node Stress: " << stress_sum << std::endl;
+        std::cout << "Node Stress: " << stress_sum;
 #endif
+        std::cout << std::endl;
         // cudaError_t error = cudaDeviceSynchronize();
         // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
