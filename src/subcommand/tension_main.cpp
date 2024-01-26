@@ -101,6 +101,8 @@ int main_tension(int argc, char **argv) {
 	args::Flag new_node_stress(tension_opts, "new-node-stress", "compute the new node-stress", {'n', "new-node-stress"});
 	// option to control if we want to compute the step-stress (only count each within-node distance, but iterate though path, then iterate through steps within path -- the same as old-node-stress)
 	args::Flag step_stress(tension_opts, "step-stress", "compute the step-stress", {'s', "step-stress"});
+	// option for old-node-stress
+	args::Flag old_node_stress(tension_opts, "old-node-stress", "compute the old node-stress", {'o', "old-node-stress"});
 	// option to control if we want to compute the node-crossing (node is pangenome graph node, not visualization node. Each node is a segment in the layout. )
 	args::Flag node_crossing(tension_opts, "node-crossing", "compute the number of node-crossing", {'x', "node-crossing"});
 
@@ -238,10 +240,11 @@ int main_tension(int argc, char **argv) {
 		
 		// normalized by the number of nodes
 		sum_stress = sum_stress / (double)graph.get_node_count();
-		cout << "stress: " << sum_stress << endl;
+		cout << "new node stress: " << sum_stress << endl;
 
 	} 
-	else if (step_stress) {
+	
+	if (step_stress) {
 		// so-called "step-stress". Only consider the within-node distance.
 		// Only one difference compared to the above new node-stress. 
 		// 1. First iterate through each step (node) in the path, then iterate through paths. So there are some over-counting instead of iterate though all the nodes directly. 
@@ -279,12 +282,12 @@ int main_tension(int argc, char **argv) {
 
 		double stress_result = sum_stress_squared_dist_weight / (double)num_steps_iterated;
 
-		std::cout << "stress: " << stress_result << std::endl;
+		std::cout << "step stress: " << stress_result << std::endl;
 
 
 	}
 	
-	else {
+	if (old_node_stress) {
 
 	// The original node-stress. There are two differences compared to the above new node-stress. 
 	// 1. First iterate through paths, then iterate through each step (node) in the path. 
@@ -382,7 +385,7 @@ int main_tension(int argc, char **argv) {
 
 		double stress_result = sum_stress_squared_dist_weight / (double)num_steps_iterated;
 
-		std::cout << "stress: " << stress_result << std::endl;
+		std::cout << "old node stress: " << stress_result << std::endl;
 
 	}
 
