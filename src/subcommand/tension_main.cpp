@@ -8,6 +8,8 @@
 #include <numeric>
 #include "progress.hpp"
 
+#include "cuda/metrics.h"
+
 namespace odgi {
 
 using namespace odgi::subcommand;
@@ -389,6 +391,11 @@ int main_tension(int argc, char **argv) {
 
 	}
 
+
+
+
+	// GPU version of node-crossing
+	cuda_hello_host();
 
 
 
