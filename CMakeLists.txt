@@ -21,7 +21,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Project's name
-project(odgi)
+project(odgi LANGUAGES CXX CUDA)
 
 # Enforce c++17
 set(CMAKE_CXX_STANDARD 17)
@@ -37,6 +37,8 @@ include(FeatureSummary)
 find_package(PkgConfig REQUIRED)
 find_package(pybind11 CONFIG)
 find_package(OpenMP)
+
+find_package(CUDA REQUIRED)
 
 feature_summary(
   FATAL_ON_MISSING_REQUIRED_PACKAGES
@@ -618,6 +620,7 @@ add_library(odgi_objs OBJECT
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_length.cpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_keep.cpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/diffpriv.cpp
+  ${CMAKE_SOURCE_DIR}/src/cuda/metrics.cu
   ${lodepng_SOURCES}
   ${handlegraph_sources}
 )
@@ -686,7 +689,8 @@ set(odgi_INCLUDES
   "${dirtyzipf_INCLUDE}"
   "${xoshiro_INCLUDE}"
   "${atomicbitvector_INCLUDE}"
-  "${mio_INCLUDE}")
+  "${mio_INCLUDE}"
+  "${CUDA_INCLUDE_DIRS}")
 
 set(odgi_LIBS
   jemalloc
@@ -802,9 +806,12 @@ set(odgi_HEADERS
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_jaccard.hpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_length.hpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_keep.hpp
-  ${CMAKE_SOURCE_DIR}/src/algorithms/diffpriv.cpp)
+  ${CMAKE_SOURCE_DIR}/src/algorithms/diffpriv.cpp
+  ${CMAKE_SOURCE_DIR}/src/cuda/metrics.h)
 
 target_include_directories(odgi_objs PUBLIC ${odgi_INCLUDES})
+# arch and gencode are configured for our GPU (RTX A6000)
+target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp -arch=sm_86 -gencode=arch=compute_86,code=sm_86>)
 
 add_library(libodgi_static STATIC $<TARGET_OBJECTS:odgi_objs>)
 set_target_properties(libodgi_static PROPERTIES OUTPUT_NAME "odgi")
