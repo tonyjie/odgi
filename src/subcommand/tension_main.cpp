@@ -12,6 +12,75 @@ namespace odgi {
 
 using namespace odgi::subcommand;
 
+// ========================= check number of node crossings. =========================
+// Here we only consider the nodes in the pangenome graph. They are segments in the layout. 
+
+struct Point 
+{ 
+	double x; 
+	double y; 
+}; 
+
+// Given three collinear points p, q, r, the function checks if 
+// point q lies on line segment 'pr' 
+bool onSegment(Point p, Point q, Point r) 
+{ 
+	if (q.x <= max(p.x, r.x) && q.x >= min(p.x, r.x) && 
+		q.y <= max(p.y, r.y) && q.y >= min(p.y, r.y)) 
+	return true; 
+
+	return false; 
+} 
+
+// To find orientation of ordered triplet (p, q, r). 
+// The function returns following values 
+// 0 --> p, q and r are collinear 
+// 1 --> Clockwise 
+// 2 --> Counterclockwise 
+int orientation(Point p, Point q, Point r) 
+{ 
+	// See https://www.geeksforgeeks.org/orientation-3-ordered-points/ 
+	// for details of below formula. 
+	int val = (q.y - p.y) * (r.x - q.x) - 
+			(q.x - p.x) * (r.y - q.y); 
+
+	if (val == 0) return 0; // collinear 
+
+	return (val > 0)? 1: 2; // clock or counterclock wise 
+} 
+
+// The main function that returns true if line segment 'p1q1' 
+// and 'p2q2' intersect. 
+bool doIntersect(Point p1, Point q1, Point p2, Point q2) 
+{ 
+	// Find the four orientations needed for general and 
+	// special cases 
+	int o1 = orientation(p1, q1, p2); 
+	int o2 = orientation(p1, q1, q2); 
+	int o3 = orientation(p2, q2, p1); 
+	int o4 = orientation(p2, q2, q1); 
+
+	// General case 
+	if (o1 != o2 && o3 != o4) 
+		return true; 
+
+	// Special Cases 
+	// p1, q1 and p2 are collinear and p2 lies on segment p1q1 
+	if (o1 == 0 && onSegment(p1, p2, q1)) return true; 
+
+	// p1, q1 and q2 are collinear and q2 lies on segment p1q1 
+	if (o2 == 0 && onSegment(p1, q2, q1)) return true; 
+
+	// p2, q2 and p1 are collinear and p1 lies on segment p2q2 
+	if (o3 == 0 && onSegment(p2, p1, q2)) return true; 
+
+	// p2, q2 and q1 are collinear and q1 lies on segment p2q2 
+	if (o4 == 0 && onSegment(p2, q1, q2)) return true; 
+
+	return false; // Doesn't fall in any of the above cases 
+} 
+// ========================= End of check number of node crossings. =========================
+
 int main_tension(int argc, char **argv) {
 
     // trick argument parser to do the right thing with the subcommand
@@ -32,6 +101,8 @@ int main_tension(int argc, char **argv) {
 	args::Flag new_node_stress(tension_opts, "new-node-stress", "compute the new node-stress", {'n', "new-node-stress"});
 	// option to control if we want to compute the step-stress (only count each within-node distance, but iterate though path, then iterate through steps within path -- the same as old-node-stress)
 	args::Flag step_stress(tension_opts, "step-stress", "compute the step-stress", {'s', "step-stress"});
+	// option to control if we want to compute the node-crossing (node is pangenome graph node, not visualization node. Each node is a segment in the layout. )
+	args::Flag node_crossing(tension_opts, "node-crossing", "compute the number of node-crossing", {'x', "node-crossing"});
 
 	args::Group threading_opts(parser, "[ Threading ]");
 	args::ValueFlag<uint64_t> nthreads(parser, "N", "number of threads to use for parallel phases", {'t', "threads"});
@@ -95,6 +166,48 @@ int main_tension(int argc, char **argv) {
         }
     }
 
+// Check the number of node crossings. 
+	if (node_crossing) {
+		cout << "compute the number of node-crossing" << endl;
+
+		// save a vector of all the node handle_t
+		std::vector<handle_t> nodes;
+		graph.for_each_handle([&](const handle_t& h) {
+			nodes.push_back(h);
+		});
+
+		// iterate through each node pair
+		uint64_t num_node_crossing = 0;
+		#pragma omp parallel for schedule(static, 1) num_threads(thread_count) reduction(+:num_node_crossing)
+		for (uint64_t i = 0; i < nodes.size(); i++) {
+			for (uint64_t j = i + 1; j < nodes.size(); j++) {
+				// get the node coordinates
+				odgi::algorithms::xy_d_t node_i_coords_start;
+				odgi::algorithms::xy_d_t node_i_coords_end;
+				odgi::algorithms::xy_d_t node_j_coords_start;
+				odgi::algorithms::xy_d_t node_j_coords_end;
+				node_i_coords_start = layout.coords(nodes[i]);
+				node_i_coords_end = layout.coords(graph.flip(nodes[i]));
+				node_j_coords_start = layout.coords(nodes[j]);
+				node_j_coords_end = layout.coords(graph.flip(nodes[j]));
+				// check if the two nodes are crossing
+				if (doIntersect({node_i_coords_start.x, node_i_coords_start.y}, {node_i_coords_end.x, node_i_coords_end.y}, \
+								{node_j_coords_start.x, node_j_coords_start.y}, {node_j_coords_end.x, node_j_coords_end.y})) {
+					num_node_crossing += 1;
+				}
+			}
+		}
+
+		cout << "node-crossing: " << num_node_crossing << " / " << nodes.size() * (nodes.size() - 1) / 2 << " = " << (double)num_node_crossing / (double)(nodes.size() * (nodes.size() - 1) / 2) << endl;
+
+
+
+
+
+	}
+
+
+
 	if (new_node_stress) {
 		cout << "compute the new node-stress" << endl;
 
@@ -128,9 +241,6 @@ int main_tension(int argc, char **argv) {
 		cout << "stress: " << sum_stress << endl;
 
 	} 
-
-
-
 	else if (step_stress) {
 		// so-called "step-stress". Only consider the within-node distance.
 		// Only one difference compared to the above new node-stress. 
