@@ -728,7 +728,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         // add a metric computing function here to print out the metric interactively during the layout process
 #ifdef METRIC        
         cuda_compute_metric<<<numBlocks, blockSize, sharedMemSize>>>(stress_partial_sum, node_data, node_count);
-        // error = cudaDeviceSynchronize();
+        error = cudaDeviceSynchronize();
         // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;        
         // sum up the partial sum
         float stress_sum = 0.0;
