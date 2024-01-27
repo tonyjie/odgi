@@ -395,7 +395,11 @@ int main_tension(int argc, char **argv) {
 
 
 	// GPU version of node-crossing
-	cuda_hello_host();
+	cuda::cuda_hello_host(graph, layout);
+
+
+
+
 
 
 
