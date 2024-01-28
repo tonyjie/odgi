@@ -7,9 +7,9 @@
 namespace cuda {
 
 
-__global__ void cuda_hello_device() {
-    printf("Hello World from CUDA device\n");
-}
+// __global__ void cuda_hello_device() {
+//     printf("Hello World from CUDA device\n");
+// }
 
 
 
@@ -100,10 +100,6 @@ void compute_node_crossing(cuda::node_data_t node_data, uint32_t N, int* blockSu
     sharedCounts[threadIdx.x] = count;
 
     __syncthreads();
-
-    // if (count > 0) {
-    //     printf("node %d has some intersect\n", tid);
-    // }
     
     // Reduction
     for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
@@ -116,14 +112,11 @@ void compute_node_crossing(cuda::node_data_t node_data, uint32_t N, int* blockSu
     // Store the partial sum
     if (threadIdx.x == 0) {
         blockSums[blockIdx.x] = sharedCounts[0];
-        printf("block %d has %d node-crossing\n", blockIdx.x, blockSums[blockIdx.x]);
     }
-
-
 }
 
 
-void cuda_hello_host(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout) {
+void cuda_node_crossing(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout) {
     printf("Hello World from CUDA host\n");
 
 
@@ -180,10 +173,6 @@ void cuda_hello_host(const odgi::graph_t &graph, odgi::algorithms::layout::Layou
     std::cout << "total_node_crossing: " << total_node_crossing << std::endl;
 
 
-
-
-    cuda_hello_device<<<1,10>>>();
-    cudaDeviceSynchronize();
     return;
 }
 

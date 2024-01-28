@@ -205,6 +205,10 @@ int main_tension(int argc, char **argv) {
 		cout << "node-crossing: " << num_node_crossing << " / " << nodes.size() * (nodes.size() - 1) / 2 << " = " << (double)num_node_crossing / (double)(nodes.size() * (nodes.size() - 1) / 2) << endl;
 
 
+		cout << "===== GPU version to compute # of node crossings =====" << endl;
+		// GPU version of computing node-crossing
+		// O(N*N) complexity. For Chr1 with N=1.1e7, it takes 131min. 
+		cuda::cuda_node_crossing(graph, layout);
 
 
 
@@ -394,8 +398,7 @@ int main_tension(int argc, char **argv) {
 
 
 
-	// GPU version of node-crossing
-	cuda::cuda_hello_host(graph, layout);
+
 
 
 
