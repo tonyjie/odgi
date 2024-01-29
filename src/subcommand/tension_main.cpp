@@ -328,7 +328,8 @@ int main_tension(int argc, char **argv) {
 
     std::cout << "top-10 path topology error: " << std::endl;
     // the largest top-10 path topology error
-    for (uint64_t i = 0; i < path_topology.size() - 1; i++) {
+    // for (uint64_t i = 0; i < path_topology.size() - 1; i++) {
+	for (uint64_t i = 0; i < 10; i++) {
         // how many steps in this path
         uint64_t num_steps = 0;
         graph.for_each_step_in_path(path_topology[i].path_handle, [&](const odgi::step_handle_t &s) {
