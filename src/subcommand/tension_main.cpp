@@ -95,277 +95,152 @@ int main_tension(int argc, char **argv) {
     }
 
 
+	// ======= check the length of each path in the layout ==========
+	std::vector<odgi::path_handle_t> paths;
+	graph.for_each_path_handle([&] (const odgi::path_handle_t &p) {
+		paths.push_back(p);
+	});
 
-/*
-    double window_size_ = 1;
-    if (window_size) {
-        window_size_ = args::get(window_size);
-    }
-    if ((node_sized_windows && window_size) || (pangenome_mode && window_size) || (pangenome_mode && node_sized_windows)) {
-        std::cerr
-                << "[odgi tension] error: Please specify only one of -w=[N], --window-size=[N] or -n, --node-sized-windows or -p, --pangenome-mode."
-                << std::endl;
-        return 1;
-    }
-
-    vector<path_handle_t> paths;
-    graph.for_each_path_handle([&] (const path_handle_t &p) {
-       paths.push_back(p);
-    });
+	struct PathInfo {
+        path_handle_t path_handle;
+        uint64_t path_nuc_dist;
+        double path_layout_len;
+        double path_len_error;
+        // Constructor
+        PathInfo(path_handle_t path_handle, uint64_t path_nuc_dist, double path_layout_len, double path_len_error)
+            : path_handle(path_handle), path_nuc_dist(path_nuc_dist), path_layout_len(path_layout_len), path_len_error(path_len_error) {};
+    };
+    // vector to save the "tolopogy error" for each path. Each vector is a (<string> path_name, <uint64_t> path_nuc_dist, <double> path_layout_len, <double> path_len_error)
+    std::vector<PathInfo> path_topology;
 
 
-	if (node_sized_windows || window_size) {
-		std::unique_ptr<algorithms::progress_meter::ProgressMeter> progress_meter;
-		if (progress) {
-			progress_meter = std::make_unique<algorithms::progress_meter::ProgressMeter>(
-					paths.size(), "[odgi::tension::main] BED Progress:");
-		}
-		algorithms::bed_records_class bed;
-		bed.open_writer();
-#pragma omp parallel for schedule(static, 1) num_threads(thread_count)
-		for (auto p: paths) {
-			std::string path_name = graph.get_path_name(p);
-			uint64_t cur_window_start = 1;
-			uint64_t cur_window_end = 0;
-			double path_layout_dist = 0;
-			uint64_t path_nuc_dist = 0;
-			graph.for_each_step_in_path(p, [&](const step_handle_t &s) {
-				handle_t h = graph.get_handle_of_step(s);
-				algorithms::xy_d_t h_coords_start;
-				algorithms::xy_d_t h_coords_end;
-				if (graph.get_is_reverse(h)) {
-					h_coords_start = layout.coords(graph.flip(h));
-					h_coords_end = layout.coords(h);
-				} else {
-					h_coords_start = layout.coords(h);
-					h_coords_end = layout.coords(graph.flip(h));
-				}
-				// TODO refactor into function start
-				// did we hit the first step?
-				if (graph.has_previous_step(s)) {
-					step_handle_t prev_s = graph.get_previous_step(s);
-					handle_t prev_h = graph.get_handle_of_step(prev_s);
-					algorithms::xy_d_t prev_h_coords_start;
-					algorithms::xy_d_t prev_h_coords_end;
-					if (graph.get_is_reverse(prev_h)) {
-						prev_h_coords_start = layout.coords(graph.flip(prev_h));
-						prev_h_coords_end = layout.coords(prev_h);
-					} else {
-						prev_h_coords_start = layout.coords(prev_h);
-						prev_h_coords_end = layout.coords(graph.flip(prev_h));
-					}
-					double within_node_dist = 0;
-					double from_node_to_node_dist = 0;
-					if (!graph.get_is_reverse(prev_h)) {
-						/// f + f
-						if (!graph.get_is_reverse(h)) {
-							within_node_dist = algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-							from_node_to_node_dist = algorithms::layout::coord_dist(prev_h_coords_end, h_coords_start);
-						} else {
-							/// f + r
-							within_node_dist = algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-							from_node_to_node_dist = algorithms::layout::coord_dist(prev_h_coords_end, h_coords_end);
-						}
-					} else {
-						/// r + r
-						if (graph.get_is_reverse(h)) {
-							within_node_dist = algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-							from_node_to_node_dist = algorithms::layout::coord_dist(prev_h_coords_start, h_coords_end);
-						} else {
-							/// r + f
-							within_node_dist = algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-							from_node_to_node_dist = algorithms::layout::coord_dist(prev_h_coords_start,
-																					h_coords_start);
-						}
-					}
-					path_layout_dist += within_node_dist;
-					path_layout_dist += from_node_to_node_dist;
-					uint64_t nuc_dist = graph.get_length(h);
-					path_nuc_dist += nuc_dist;
-					cur_window_end += nuc_dist;
-				} else {
-					// we only take a look at the current node
-					/// f
-					if (!graph.get_is_reverse(h)) {
-						path_layout_dist += algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-					} else {
-						/// r
-						path_layout_dist += algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-					}
-					uint64_t nuc_dist = graph.get_length(h);
-					path_nuc_dist += nuc_dist;
-					cur_window_end += nuc_dist;
-				} // TODO refactor into function end
-				// we add a new bed entry for each step
-				if (node_sized_windows) {
-					double path_layout_nuc_dist_ratio = (double) path_layout_dist / (double) path_nuc_dist;
-					bed.append(path_name,
-							   (cur_window_start - 1),
-							   cur_window_end,
-							   path_layout_dist,
-							   path_nuc_dist,
-							   path_layout_nuc_dist_ratio);
-					cur_window_start = cur_window_end + 1;
-					cur_window_end = cur_window_start - 1;
-					path_layout_dist = 0;
-					path_nuc_dist = 0;
-					// we only add a new entry of the current node exceeds the window size
-				} else if ((cur_window_end - cur_window_start + 1) >= window_size_) {
-					double path_layout_nuc_dist_ratio = (double) path_layout_dist / (double) path_nuc_dist;
-					bed.append(path_name,
-							   (cur_window_start - 1),
-							   cur_window_end,
-							   path_layout_dist,
-							   path_nuc_dist,
-							   path_layout_nuc_dist_ratio);
-					cur_window_start = cur_window_end + 1;
-					cur_window_end = cur_window_start - 1;
-					path_layout_dist = 0;
-					path_nuc_dist = 0;
-				}
-			});
-			/// we have to add the last window
-			// we add a new bed entry for each step
-			if (!node_sized_windows) {
-				double path_layout_nuc_dist_ratio = (double) path_layout_dist / (double) path_nuc_dist;
-				bed.append(path_name,
-						   (cur_window_start - 1),
-						   cur_window_end,
-						   path_layout_dist,
-						   path_nuc_dist,
-						   path_layout_nuc_dist_ratio);
-			}
-			if (progress) {
-				progress_meter->increment(1);
-			}
-		}
-		bed.close_writer();
-		if (progress) {
-			progress_meter->finish();
-		}
-		// TODO we want the pangenome tension
-		// we want to sum up the tension!
-		// tension = (lay/nuc);
-		// if (tension < 1) { tension = 1/tension };
-	} else {
-		std::vector<double> node_tensions(graph.get_node_count() + 1, 0.0);
-		std::unique_ptr<algorithms::progress_meter::ProgressMeter> progress_meter;
-		if (progress) {
-			progress_meter = std::make_unique<algorithms::progress_meter::ProgressMeter>(
-					paths.size(), "[odgi::tension::main] Pangenome Mode Progress:");
-		}
-		// std::cout << "TEST\tPANGENOME\tMODE" << std::endl;
-#pragma omp parallel for schedule(static, 1) num_threads(thread_count) shared(node_tensions)
-		for (auto p: paths) {
-			double path_layout_dist;
-			uint64_t path_nuc_dist;
-			graph.for_each_step_in_path(p, [&](const step_handle_t &s) {
-				path_layout_dist = 0;
-				path_nuc_dist = 0;
-				handle_t h = graph.get_handle_of_step(s);
-				algorithms::xy_d_t h_coords_start;
-				algorithms::xy_d_t h_coords_end;
-				if (graph.get_is_reverse(h)) {
-					h_coords_start = layout.coords(graph.flip(h));
-					h_coords_end = layout.coords(h);
-				} else {
-					h_coords_start = layout.coords(h);
-					h_coords_end = layout.coords(graph.flip(h));
-				}
-				// TODO refactor into function start
-				// did we hit the first step?
-				if (graph.has_previous_step(s)) {
-					step_handle_t prev_s = graph.get_previous_step(s);
-					handle_t prev_h = graph.get_handle_of_step(prev_s);
-					algorithms::xy_d_t prev_h_coords_start;
-					algorithms::xy_d_t prev_h_coords_end;
-					if (graph.get_is_reverse(prev_h)) {
-						prev_h_coords_start = layout.coords(graph.flip(prev_h));
-						prev_h_coords_end = layout.coords(prev_h);
-					} else {
-						prev_h_coords_start = layout.coords(prev_h);
-						prev_h_coords_end = layout.coords(graph.flip(prev_h));
-					}
-					double within_node_dist = 0;
-					double from_node_to_node_dist = 0;
-					if (!graph.get_is_reverse(prev_h)) {
-						/// f + f
-						if (!graph.get_is_reverse(h)) {
-							within_node_dist = algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-							from_node_to_node_dist = algorithms::layout::coord_dist(prev_h_coords_end, h_coords_start);
-						} else {
-							/// f + r
-							within_node_dist = algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-							from_node_to_node_dist = algorithms::layout::coord_dist(prev_h_coords_end, h_coords_end);
-						}
-					} else {
-						/// r + r
-						if (graph.get_is_reverse(h)) {
-							within_node_dist = algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-							from_node_to_node_dist = algorithms::layout::coord_dist(prev_h_coords_start, h_coords_end);
-						} else {
-							/// r + f
-							within_node_dist = algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-							from_node_to_node_dist = algorithms::layout::coord_dist(prev_h_coords_start,
-																					h_coords_start);
-						}
-					}
-					path_layout_dist += within_node_dist;
-					path_layout_dist += from_node_to_node_dist;
-					uint64_t nuc_dist = graph.get_length(h);
-					path_nuc_dist += nuc_dist;
-					// cur_window_end += nuc_dist;
-				} else {
-					// we only take a look at the current node
-					/// f
-					if (!graph.get_is_reverse(h)) {
-						path_layout_dist += algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-					} else {
-						/// r
-						path_layout_dist += algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-					}
-					uint64_t nuc_dist = graph.get_length(h);
-					path_nuc_dist += nuc_dist;
-					// cur_window_end += nuc_dist;
-				} // TODO refactor into function end
-				double tension = (double)path_layout_dist / (double)path_nuc_dist;
-				if (tension < 1.0) {
-					tension = 1 / tension;
-				}
+    #pragma omp parallel for schedule(static, 1) num_threads(thread_count)
+	for (auto p : paths) {
+        uint64_t path_nuc_dist = 0;
+        odgi::algorithms::xy_d_t start_p, end_p; // start point of the first step in the path; end point of the last step in the path
+        double path_layout_len = 0;
 
-				node_tensions[graph.get_id(h)] = node_tensions[graph.get_id(h)] + tension;
-			});
-			if (progress) {
-				progress_meter->increment(1);
-			}
-		}
-		if (progress) {
-			progress_meter->finish();
-		}
-		graph.for_each_handle([&](const handle_t &h) {
-			uint64_t n_id = graph.get_id(h);
-			double handle_tension = node_tensions[n_id];
-			uint64_t step_count_h = graph.get_step_count(h);
-			double handle_tension_norm = handle_tension / (double)step_count_h;
-			std::cout << n_id << "\t" << handle_tension << "\t" << handle_tension_norm << std::endl;
+		graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
+            // count the length of each path
+			odgi::handle_t h = graph.get_handle_of_step(s);
+			uint64_t step_nuc_dist = graph.get_length(h);
+            path_nuc_dist += step_nuc_dist;
+
+            // if this is the first step
+            if (!graph.has_previous_step(s)) {
+                // std::cout << "first step: " << endl;
+                // start point of the first step (ignore reverse right now)
+                start_p = layout.coords(h);
+            }
+
+            // if this is the last step
+            if (!graph.has_next_step(s)) {
+                // std::cout << "last step: " << endl;
+                end_p = layout.coords(graph.flip(h));
+            }
+            
+
 		});
-	}
-*/
 
+        path_layout_len = odgi::algorithms::layout::coord_dist(start_p, end_p);
+        // normalized squared error
+        double path_len_error = pow((((double)path_layout_len - (double)path_nuc_dist) / (double)path_nuc_dist), 2);
+        // std::cout << "path: " << graph.get_path_name(p) << " nuc_dist: " << path_nuc_dist << "; layout_len: " << path_layout_len << "; error: " << path_len_error << std::endl;
 
-// What we need
-// void metrics_compute(odgi::algorithms::layout::Layout &layout, 
-//                      const handlegraph::PathHandleGraph &graph, 
-//                      int thread_count,
-//                      double &stress_result) {
+        path_topology.push_back(PathInfo(p, path_nuc_dist, path_layout_len, path_len_error));
+    }
 
+    // compute the average path topology error
+    double sum_path_topology_error = 0;
+    for (auto& p : path_topology) {
+        sum_path_topology_error += p.path_len_error;
+    }
+    double avg_path_topology_error = sum_path_topology_error / (double)path_topology.size();
 
+	std::cout << "average path topology error: " << avg_path_topology_error << std::endl;
 
-// /*
-    std::vector<odgi::path_handle_t> paths;
-    graph.for_each_path_handle([&] (const odgi::path_handle_t &p) {
-        paths.push_back(p);
+    // show top-10 path topology error
+
+    std::sort(path_topology.begin(), path_topology.end(), [](const PathInfo& a, const PathInfo& b) {
+        return a.path_len_error > b.path_len_error;
     });
+
+
+
+    // investigate into the first five path (weird)
+    // std::cout << "==== Check the path with largest error =====" << std::endl;
+    // for (uint64_t i = 0; i < 1; i++) {
+    //     std::cout << "path: " << graph.get_path_name(path_topology[i].path_handle) << " nuc_dist: " << path_topology[i].path_nuc_dist << "; layout_len: " << path_topology[i].path_layout_len << "; error: " << path_topology[i].path_len_error << std::endl;
+    //     graph.for_each_step_in_path(path_topology[i].path_handle, [&](const odgi::step_handle_t &s) {
+    //         odgi::handle_t h = graph.get_handle_of_step(s);
+    //         // the layout coordinates of the node -- layout distance
+    //         odgi::algorithms::xy_d_t h_coords_start;
+    //         odgi::algorithms::xy_d_t h_coords_end;
+    //         h_coords_start = layout.coords(h);
+    //         h_coords_end = layout.coords(graph.flip(h));
+    //         double within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
+    //         double node_to_node_dist = 0; 
+    //         if (graph.has_previous_step(s)) {
+    //             odgi::step_handle_t prev_s = graph.get_previous_step(s);
+    //             odgi::handle_t prev_h = graph.get_handle_of_step(prev_s);
+    //             odgi::algorithms::xy_d_t prev_h_coords_start;
+    //             odgi::algorithms::xy_d_t prev_h_coords_end;
+    //             prev_h_coords_start = layout.coords(prev_h);
+    //             prev_h_coords_end = layout.coords(graph.flip(prev_h));
+    //             node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_end, h_coords_start);
+    //         }
+
+
+    //         std::cout << "node: " << graph.get_id(h) << " length: " << graph.get_length(h) << " within_node_dist: " << within_node_dist << " node_to_node_dist: " << node_to_node_dist << std::endl;
+    //     }
+    //     );
+    //     std::cout << std::endl;
+    // }
+
+
+    // path_handle_t error_path = path_topology[0].path_handle;
+    // // how many steps in this path
+    // graph.for_each_step_in_path(error_path, [&](const odgi::step_handle_t &s) {
+    //     odgi::handle_t h = graph.get_handle_of_step(s);
+    //     std::cout << "node: " << graph.get_id(h) << " length: " << graph.get_length(h) << std::endl;
+    // }
+    // );
+
+
+    std::cout << "top-10 path topology error: " << std::endl;
+    // the largest top-10 path topology error
+    // for (uint64_t i = 0; i < path_topology.size() - 1; i++) {
+	for (uint64_t i = 0; i < 10; i++) {
+        // how many steps in this path
+        uint64_t num_steps = 0;
+        graph.for_each_step_in_path(path_topology[i].path_handle, [&](const odgi::step_handle_t &s) {
+            num_steps += 1;
+        }
+        );
+        std::cout << "path: " << graph.get_path_name(path_topology[i].path_handle) << " nuc_dist: " << path_topology[i].path_nuc_dist << "; layout_len: " << path_topology[i].path_layout_len << "; error: " << path_topology[i].path_len_error << 
+        " num_steps: " << num_steps << std::endl;
+    }
+
+
+    // show the least top-10 path topology error
+    // std::cout << "least top-10 path topology error: " << std::endl;
+    // for (uint64_t i = path_topology.size() - 1; i > path_topology.size() - 11; i--) {
+    //     // how many steps in this path
+    //     uint64_t num_steps = 0;
+    //     graph.for_each_step_in_path(path_topology[i].path_handle, [&](const odgi::step_handle_t &s) {
+    //         num_steps += 1;
+    //     }
+    //     );
+    //     std::cout << "path: " << graph.get_path_name(path_topology[i].path_handle) << " nuc_dist: " << path_topology[i].path_nuc_dist << "; layout_len: " << path_topology[i].path_layout_len << "; error: " \\
+    //     << path_topology[i].path_len_error << "num_steps: " << num_steps << std::endl;
+    // }
+
+
+
+    // std::vector<odgi::path_handle_t> paths;
+    // graph.for_each_path_handle([&] (const odgi::path_handle_t &p) {
+    //     paths.push_back(p);
+    // });
 
 
     double sum_stress_squared_dist_weight = 0;
