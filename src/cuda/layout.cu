@@ -168,6 +168,15 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
     assert(p.step_count > 1);
 
+    // restrict the number of concurrent threads for the path with very small number of steps (e.g. num_steps = 4), which is fewer than one warp (32 threads)
+    if (p.step_count < 32) {
+        if (threadIdx.x >= p.step_count) {
+            return;
+        }
+    }
+
+
+
     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
     uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
     assert(s1_idx < p.step_count);
