@@ -148,19 +148,23 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5);
     }
 
-    // select path
-    __shared__ uint32_t first_step_idx[32];
-    if (threadIdx.x % 32 == 0) {
-        // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
-        assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
-    }
-    __syncwarp();
+    // select path: each thread in a warp selects the same path
+    // __shared__ uint32_t first_step_idx[32];
+    // if (threadIdx.x % 32 == 0) {
+    //     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
+    //     first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+    //     assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
+    // }
+    // __syncwarp();
 
-    // find path of step of specific thread with LUT (threads in warp pick same path)
-    uint32_t step_idx = first_step_idx[threadIdx.x / 32];
+    // // find path of step of specific thread with LUT (threads in warp pick same path)
+    // uint32_t step_idx = first_step_idx[threadIdx.x / 32];
+    // uint32_t path_idx = path_data.element_array[step_idx].pidx;
+
+
+    // each thread select its own path
+    uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
-
 
     path_t p = path_data.paths[path_idx];
     if (p.step_count < 2) {
@@ -170,12 +174,12 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     // restrict the number of concurrent threads within a warp for the path with very small number of steps (e.g. num_steps = 4), which is fewer than one warp (32 threads)
     // [FAIL] only add this doesn't work. 
-    if (p.step_count < 32) {
-        // only the first few threads in the warp are allowed to run. (threadIdx.x % 32) is the thread id within a warp
-        if ((threadIdx.x % 32) >= p.step_count) {
-            return;
-        } 
-    }
+    // if (p.step_count < 32) {
+    //     // only the first few threads in the warp are allowed to run. (threadIdx.x % 32) is the thread id within a warp
+    //     if ((threadIdx.x % 32) >= p.step_count) {
+    //         return;
+    //     } 
+    // }
 
 
 
