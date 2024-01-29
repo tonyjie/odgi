@@ -210,9 +210,147 @@ int main_tension(int argc, char **argv) {
 		// O(N*N) complexity. For Chr1 with N=1.1e7, it takes 131min. 
 		cuda::cuda_node_crossing(graph, layout);
 
-
-
 	}
+
+
+	// check the length of each path in the layout
+	std::vector<odgi::path_handle_t> paths;
+	graph.for_each_path_handle([&] (const odgi::path_handle_t &p) {
+		paths.push_back(p);
+	});
+
+
+    struct PathInfo {
+        path_handle_t path_handle;
+        uint64_t path_nuc_dist;
+        double path_layout_len;
+        double path_len_error;
+        // Constructor
+        PathInfo(path_handle_t path_handle, uint64_t path_nuc_dist, double path_layout_len, double path_len_error)
+            : path_handle(path_handle), path_nuc_dist(path_nuc_dist), path_layout_len(path_layout_len), path_len_error(path_len_error) {};
+    };
+    // vector to save the "tolopogy error" for each path. Each vector is a (<string> path_name, <uint64_t> path_nuc_dist, <double> path_layout_len, <double> path_len_error)
+    std::vector<PathInfo> path_topology;
+
+
+    #pragma omp parallel for schedule(static, 1) num_threads(thread_count)
+	for (auto p : paths) {
+        uint64_t path_nuc_dist = 0;
+        odgi::algorithms::xy_d_t start_p, end_p; // start point of the first step in the path; end point of the last step in the path
+        double path_layout_len = 0;
+
+		graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
+            // count the length of each path
+			odgi::handle_t h = graph.get_handle_of_step(s);
+			uint64_t step_nuc_dist = graph.get_length(h);
+            path_nuc_dist += step_nuc_dist;
+
+            // if this is the first step
+            if (!graph.has_previous_step(s)) {
+                // std::cout << "first step: " << endl;
+                // start point of the first step (ignore reverse right now)
+                start_p = layout.coords(h);
+            }
+
+            // if this is the last step
+            if (!graph.has_next_step(s)) {
+                // std::cout << "last step: " << endl;
+                end_p = layout.coords(graph.flip(h));
+            }
+            
+
+		});
+
+        path_layout_len = odgi::algorithms::layout::coord_dist(start_p, end_p);
+        // normalized squared error
+        double path_len_error = pow((((double)path_layout_len - (double)path_nuc_dist) / (double)path_nuc_dist), 2);
+        // std::cout << "path: " << graph.get_path_name(p) << " nuc_dist: " << path_nuc_dist << "; layout_len: " << path_layout_len << "; error: " << path_len_error << std::endl;
+
+        path_topology.push_back(PathInfo(p, path_nuc_dist, path_layout_len, path_len_error));
+    }
+
+    // compute the average path topology error
+    double sum_path_topology_error = 0;
+    for (auto& p : path_topology) {
+        sum_path_topology_error += p.path_len_error;
+    }
+    double avg_path_topology_error = sum_path_topology_error / (double)path_topology.size();
+
+    // show top-10 path topology error
+
+    std::sort(path_topology.begin(), path_topology.end(), [](const PathInfo& a, const PathInfo& b) {
+        return a.path_len_error > b.path_len_error;
+    });
+
+
+    // investigate into the first five path (weird)
+    std::cout << "==== Check the path with largest error =====" << std::endl;
+    for (uint64_t i = 0; i < 1; i++) {
+        std::cout << "path: " << graph.get_path_name(path_topology[i].path_handle) << " nuc_dist: " << path_topology[i].path_nuc_dist << "; layout_len: " << path_topology[i].path_layout_len << "; error: " << path_topology[i].path_len_error << std::endl;
+        graph.for_each_step_in_path(path_topology[i].path_handle, [&](const odgi::step_handle_t &s) {
+            odgi::handle_t h = graph.get_handle_of_step(s);
+            // the layout coordinates of the node -- layout distance
+            odgi::algorithms::xy_d_t h_coords_start;
+            odgi::algorithms::xy_d_t h_coords_end;
+            h_coords_start = layout.coords(h);
+            h_coords_end = layout.coords(graph.flip(h));
+            double within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
+            double node_to_node_dist = 0; 
+            if (graph.has_previous_step(s)) {
+                odgi::step_handle_t prev_s = graph.get_previous_step(s);
+                odgi::handle_t prev_h = graph.get_handle_of_step(prev_s);
+                odgi::algorithms::xy_d_t prev_h_coords_start;
+                odgi::algorithms::xy_d_t prev_h_coords_end;
+                prev_h_coords_start = layout.coords(prev_h);
+                prev_h_coords_end = layout.coords(graph.flip(prev_h));
+                node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_end, h_coords_start);
+            }
+
+
+            std::cout << "node: " << graph.get_id(h) << " length: " << graph.get_length(h) << " within_node_dist: " << within_node_dist << " node_to_node_dist: " << node_to_node_dist << std::endl;
+        }
+        );
+        std::cout << std::endl;
+    }
+
+
+    // path_handle_t error_path = path_topology[0].path_handle;
+    // // how many steps in this path
+    // graph.for_each_step_in_path(error_path, [&](const odgi::step_handle_t &s) {
+    //     odgi::handle_t h = graph.get_handle_of_step(s);
+    //     std::cout << "node: " << graph.get_id(h) << " length: " << graph.get_length(h) << std::endl;
+    // }
+    // );
+
+
+    std::cout << "top-10 path topology error: " << std::endl;
+    // the largest top-10 path topology error
+    for (uint64_t i = 0; i < path_topology.size() - 1; i++) {
+        // how many steps in this path
+        uint64_t num_steps = 0;
+        graph.for_each_step_in_path(path_topology[i].path_handle, [&](const odgi::step_handle_t &s) {
+            num_steps += 1;
+        }
+        );
+        std::cout << "path: " << graph.get_path_name(path_topology[i].path_handle) << " nuc_dist: " << path_topology[i].path_nuc_dist << "; layout_len: " << path_topology[i].path_layout_len << "; error: " << path_topology[i].path_len_error << 
+        " num_steps: " << num_steps << std::endl;
+    }
+
+
+    // show the least top-10 path topology error
+    // std::cout << "least top-10 path topology error: " << std::endl;
+    // for (uint64_t i = path_topology.size() - 1; i > path_topology.size() - 11; i--) {
+    //     // how many steps in this path
+    //     uint64_t num_steps = 0;
+    //     graph.for_each_step_in_path(path_topology[i].path_handle, [&](const odgi::step_handle_t &s) {
+    //         num_steps += 1;
+    //     }
+    //     );
+    //     std::cout << "path: " << graph.get_path_name(path_topology[i].path_handle) << " nuc_dist: " << path_topology[i].path_nuc_dist << "; layout_len: " << path_topology[i].path_layout_len << "; error: " \\
+    //     << path_topology[i].path_len_error << "num_steps: " << num_steps << std::endl;
+    // }
+
+    // std::cout << "average path topology error: " << avg_path_topology_error << std::endl;
 
 
 
