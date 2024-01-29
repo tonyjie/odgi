@@ -168,11 +168,13 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
     assert(p.step_count > 1);
 
-    // restrict the number of concurrent threads for the path with very small number of steps (e.g. num_steps = 4), which is fewer than one warp (32 threads)
+    // restrict the number of concurrent threads within a warp for the path with very small number of steps (e.g. num_steps = 4), which is fewer than one warp (32 threads)
+    // [FAIL] only add this doesn't work. 
     if (p.step_count < 32) {
-        if (threadIdx.x >= p.step_count) {
+        // only the first few threads in the warp are allowed to run. (threadIdx.x % 32) is the thread id within a warp
+        if ((threadIdx.x % 32) >= p.step_count) {
             return;
-        }
+        } 
     }
 
 
