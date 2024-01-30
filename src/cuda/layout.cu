@@ -73,7 +73,7 @@ __global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoales
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     // initialize curandState with original curand implementation
     // curand_init(42+tid, tid, 0, &rnd_state_tmp[tid]);
-    curand_init(9399220, tid, 0, &rnd_state_tmp[tid]);
+    curand_init(9399220+tid, tid, 0, &rnd_state_tmp[tid]);
     // copy to coalesced data structure
     rnd_state[blockIdx.x].d[threadIdx.x] = rnd_state_tmp[tid].d;
     rnd_state[blockIdx.x].w0[threadIdx.x] = rnd_state_tmp[tid].v[0];
@@ -110,6 +110,23 @@ __device__ double curand_uniform_double_coalesced(curandStateCoalesced_t *state,
 
     // convert to float; see curand_uniform.h
     return _curand_uniform_double_hq(x, y);
+}
+
+__device__ uint32_t curand_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
+    // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
+    // also used in curand library (see curand_kernel.h)
+    uint32_t t;
+    t = state->w0[thread_id] ^ (state->w0[thread_id] >> 2);
+    state->w0[thread_id] = state->w1[thread_id];
+    state->w1[thread_id] = state->w2[thread_id];
+    state->w2[thread_id] = state->w3[thread_id];
+    state->w3[thread_id] = state->w4[thread_id];
+    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
+    state->d[thread_id] += 362437;
+
+    uint32_t rnd_uint = state->d[thread_id] + state->w4[thread_id];
+    
+    return rnd_uint;
 }
 
 __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
@@ -186,13 +203,17 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
 
     // select path: each thread in a warp selects the same path
-    // __shared__ uint32_t first_step_idx[32];
-    // if (threadIdx.x % 32 == 0) {
-    //     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    //     first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
-    //     assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
-    // }
-    // __syncwarp();
+    __shared__ uint32_t first_step_idx[32];
+    if (threadIdx.x % 32 == 0) {
+        // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
+        // first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+        // first_step_idx[threadIdx.x / 32] = uint32_t(round(((double)1.0 - curand_uniform_double_coalesced(thread_rnd_state, threadIdx.x)) * double(path_data.total_path_steps)));
+
+        // first_step_idx[threadIdx.x / 32] = uint32_t( curand_uniform_double_coalesced(thread_rnd_state, threadIdx.x) * (double(path_data.total_path_steps) + 0.9999999999) );
+
+        assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
+    }
+    __syncwarp();
 
     // // find path of step of specific thread with LUT (threads in warp pick same path)
     // uint32_t step_idx = first_step_idx[threadIdx.x / 32];
@@ -200,11 +221,13 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
 
     // each thread select its own path
-    uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_double_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+    // uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_double_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+    uint32_t step_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % path_data.total_path_steps;
 
     // use standard curand_uniform to select path
     // uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_double(&rnd_state_std[tid])) * double(path_data.total_path_steps)));
 
+    // uint32_t step_idx = curand(&rnd_state_std[tid]) % path_data.total_path_steps;
 
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
     // if (threadIdx.x == 0) {
