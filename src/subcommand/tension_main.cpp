@@ -243,92 +243,92 @@ int main_tension(int argc, char **argv) {
     // });
 
 
-    double sum_stress_squared_dist_weight = 0;
-    uint32_t num_steps_iterated = 0;
+    // double sum_stress_squared_dist_weight = 0;
+    // uint32_t num_steps_iterated = 0;
 
-    #pragma omp parallel for schedule(static, 1) num_threads(thread_count) reduction(+:sum_stress_squared_dist_weight, num_steps_iterated)
-    for (auto p: paths) {
-        double path_layout_dist;
-        uint64_t path_nuc_dist;
-        graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
-            path_layout_dist = 0;
-            path_nuc_dist = 0;
-            odgi::handle_t h = graph.get_handle_of_step(s);
-            odgi::algorithms::xy_d_t h_coords_start;
-            odgi::algorithms::xy_d_t h_coords_end;
-            if (graph.get_is_reverse(h)) {
-                h_coords_start = layout.coords(graph.flip(h));
-                h_coords_end = layout.coords(h);
-            } else {
-                h_coords_start = layout.coords(h);
-                h_coords_end = layout.coords(graph.flip(h));
-            }
-            // TODO refactor into function start
-            // did we hit the first step?
-            if (graph.has_previous_step(s)) {
-                odgi::step_handle_t prev_s = graph.get_previous_step(s);
-                odgi::handle_t prev_h = graph.get_handle_of_step(prev_s);
-                odgi::algorithms::xy_d_t prev_h_coords_start;
-                odgi::algorithms::xy_d_t prev_h_coords_end;
-                if (graph.get_is_reverse(prev_h)) {
-                    prev_h_coords_start = layout.coords(graph.flip(prev_h));
-                    prev_h_coords_end = layout.coords(prev_h);
-                } else {
-                    prev_h_coords_start = layout.coords(prev_h);
-                    prev_h_coords_end = layout.coords(graph.flip(prev_h));
-                }
-                double within_node_dist = 0;
-                double from_node_to_node_dist = 0;
-                if (!graph.get_is_reverse(prev_h)) {
-                    /// f + f
-                    if (!graph.get_is_reverse(h)) {
-                        within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-                        from_node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_end, h_coords_start);
-                    } else {
-                        /// f + r
-                        within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-                        from_node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_end, h_coords_end);
-                    }
-                } else {
-                    /// r + r
-                    if (graph.get_is_reverse(h)) {
-                        within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-                        from_node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_start, h_coords_end);
-                    } else {
-                        /// r + f
-                        within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-                        from_node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_start,
-                                                                                h_coords_start);
-                    }
-                }
-                path_layout_dist += within_node_dist;
-                path_layout_dist += from_node_to_node_dist;
-                uint64_t nuc_dist = graph.get_length(h);
-                path_nuc_dist += nuc_dist;
-                // cur_window_end += nuc_dist;
-            } else {
-                // we only take a look at the current node
-                /// f
-                if (!graph.get_is_reverse(h)) {
-                    path_layout_dist += odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
-                } else {
-                    /// r
-                    path_layout_dist += odgi::algorithms::layout::coord_dist(h_coords_end, h_coords_start);
-                }
-                uint64_t nuc_dist = graph.get_length(h);
-                path_nuc_dist += nuc_dist;
-                // cur_window_end += nuc_dist;
-            } // TODO refactor into function end
+    // #pragma omp parallel for schedule(static, 1) num_threads(thread_count) reduction(+:sum_stress_squared_dist_weight, num_steps_iterated)
+    // for (auto p: paths) {
+    //     double path_layout_dist;
+    //     uint64_t path_nuc_dist;
+    //     graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
+    //         path_layout_dist = 0;
+    //         path_nuc_dist = 0;
+    //         odgi::handle_t h = graph.get_handle_of_step(s);
+    //         odgi::algorithms::xy_d_t h_coords_start;
+    //         odgi::algorithms::xy_d_t h_coords_end;
+    //         if (graph.get_is_reverse(h)) {
+    //             h_coords_start = layout.coords(graph.flip(h));
+    //             h_coords_end = layout.coords(h);
+    //         } else {
+    //             h_coords_start = layout.coords(h);
+    //             h_coords_end = layout.coords(graph.flip(h));
+    //         }
+    //         // TODO refactor into function start
+    //         // did we hit the first step?
+    //         if (graph.has_previous_step(s)) {
+    //             odgi::step_handle_t prev_s = graph.get_previous_step(s);
+    //             odgi::handle_t prev_h = graph.get_handle_of_step(prev_s);
+    //             odgi::algorithms::xy_d_t prev_h_coords_start;
+    //             odgi::algorithms::xy_d_t prev_h_coords_end;
+    //             if (graph.get_is_reverse(prev_h)) {
+    //                 prev_h_coords_start = layout.coords(graph.flip(prev_h));
+    //                 prev_h_coords_end = layout.coords(prev_h);
+    //             } else {
+    //                 prev_h_coords_start = layout.coords(prev_h);
+    //                 prev_h_coords_end = layout.coords(graph.flip(prev_h));
+    //             }
+    //             double within_node_dist = 0;
+    //             double from_node_to_node_dist = 0;
+    //             if (!graph.get_is_reverse(prev_h)) {
+    //                 /// f + f
+    //                 if (!graph.get_is_reverse(h)) {
+    //                     within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
+    //                     from_node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_end, h_coords_start);
+    //                 } else {
+    //                     /// f + r
+    //                     within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
+    //                     from_node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_end, h_coords_end);
+    //                 }
+    //             } else {
+    //                 /// r + r
+    //                 if (graph.get_is_reverse(h)) {
+    //                     within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_end, h_coords_start);
+    //                     from_node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_start, h_coords_end);
+    //                 } else {
+    //                     /// r + f
+    //                     within_node_dist = odgi::algorithms::layout::coord_dist(h_coords_end, h_coords_start);
+    //                     from_node_to_node_dist = odgi::algorithms::layout::coord_dist(prev_h_coords_start,
+    //                                                                             h_coords_start);
+    //                 }
+    //             }
+    //             path_layout_dist += within_node_dist;
+    //             path_layout_dist += from_node_to_node_dist;
+    //             uint64_t nuc_dist = graph.get_length(h);
+    //             path_nuc_dist += nuc_dist;
+    //             // cur_window_end += nuc_dist;
+    //         } else {
+    //             // we only take a look at the current node
+    //             /// f
+    //             if (!graph.get_is_reverse(h)) {
+    //                 path_layout_dist += odgi::algorithms::layout::coord_dist(h_coords_start, h_coords_end);
+    //             } else {
+    //                 /// r
+    //                 path_layout_dist += odgi::algorithms::layout::coord_dist(h_coords_end, h_coords_start);
+    //             }
+    //             uint64_t nuc_dist = graph.get_length(h);
+    //             path_nuc_dist += nuc_dist;
+    //             // cur_window_end += nuc_dist;
+    //         } // TODO refactor into function end
 
-            sum_stress_squared_dist_weight += pow((((double)path_layout_dist - (double)path_nuc_dist) / (double)path_nuc_dist), 2); // weight = 1 / (d*d)
+    //         sum_stress_squared_dist_weight += pow((((double)path_layout_dist - (double)path_nuc_dist) / (double)path_nuc_dist), 2); // weight = 1 / (d*d)
 
-            num_steps_iterated += 1;
-        });
-    }
+    //         num_steps_iterated += 1;
+    //     });
+    // }
 
-    double stress_result = sum_stress_squared_dist_weight / (double)num_steps_iterated;
+    // double stress_result = sum_stress_squared_dist_weight / (double)num_steps_iterated;
 
-	std::cout << "stress: " << stress_result << std::endl;
+	// std::cout << "stress: " << stress_result << std::endl;
 // */
 
 // }	

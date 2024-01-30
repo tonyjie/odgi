@@ -61,10 +61,19 @@ __global__ void cuda_compute_metric(float *stress_partial_sum, cuda::node_data_t
 
 #endif
 
+// standard curand_init function
+__global__ void cuda_device_init_std(curandState *rnd_state) {
+    int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    curand_init(1234, tid, 0, &rnd_state[tid]);
+}
+
+
+
 __global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoalesced_t *rnd_state) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     // initialize curandState with original curand implementation
-    curand_init(42+tid, tid, 0, &rnd_state_tmp[tid]);
+    // curand_init(42+tid, tid, 0, &rnd_state_tmp[tid]);
+    curand_init(9399220, tid, 0, &rnd_state_tmp[tid]);
     // copy to coalesced data structure
     rnd_state[blockIdx.x].d[threadIdx.x] = rnd_state_tmp[tid].d;
     rnd_state[blockIdx.x].w0[threadIdx.x] = rnd_state_tmp[tid].v[0];
@@ -74,6 +83,34 @@ __global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoales
     rnd_state[blockIdx.x].w4[threadIdx.x] = rnd_state_tmp[tid].v[4];
 }
 
+__device__ double curand_uniform_double_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
+    // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
+    // also used in curand library (see curand_kernel.h)
+
+    // x = curand(state)
+    uint32_t t;
+    t = state->w0[thread_id] ^ (state->w0[thread_id] >> 2);
+    state->w0[thread_id] = state->w1[thread_id];
+    state->w1[thread_id] = state->w2[thread_id];
+    state->w2[thread_id] = state->w3[thread_id];
+    state->w3[thread_id] = state->w4[thread_id];
+    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
+    state->d[thread_id] += 362437;
+    uint32_t x = state->d[thread_id] + state->w4[thread_id];
+
+    // y = curand(state)
+    t = state->w0[thread_id] ^ (state->w0[thread_id] >> 2);
+    state->w0[thread_id] = state->w1[thread_id];
+    state->w1[thread_id] = state->w2[thread_id];
+    state->w2[thread_id] = state->w3[thread_id];
+    state->w3[thread_id] = state->w4[thread_id];
+    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
+    state->d[thread_id] += 362437;
+    uint32_t y = state->d[thread_id] + state->w4[thread_id];
+
+    // convert to float; see curand_uniform.h
+    return _curand_uniform_double_hq(x, y);
+}
 
 __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
     // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
@@ -137,7 +174,7 @@ static __device__ __inline__ uint32_t __mysmid(){
 }
 
 __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, cuda::node_data_t node_data,
-        cuda::path_data_t path_data) {
+        cuda::path_data_t path_data, uint32_t *path_hist, curandState *rnd_state_std) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
     assert(smid < 84);
@@ -163,8 +200,21 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
 
     // each thread select its own path
-    uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+    uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_double_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+
+    // use standard curand_uniform to select path
+    // uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_double(&rnd_state_std[tid])) * double(path_data.total_path_steps)));
+
+
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
+    // if (threadIdx.x == 0) {
+    //     printf("tid: %d, path_idx: %d\n", tid, path_idx);
+    // }
+
+    // count this path selection, saved in a histogram
+    atomicAdd(&path_hist[path_idx], 1);
+    return; // continue to the next for loop (to speedup the process)
+
 
     path_t p = path_data.paths[path_idx];
     if (p.step_count < 2) {
@@ -310,7 +360,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 }
 
 
-void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
+void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data, std::atomic<uint32_t> *path_hist) {
     int nbr_threads = config.nthreads;
     std::cout << "cuda cpu layout (" << nbr_threads << " threads)" << std::endl;
     std::vector<uint64_t> path_dist;
@@ -365,6 +415,12 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 #endif
                 // get path
                 uint32_t path_idx = rand_path(gen);
+
+                // count this path selection, saved in a histogram. Then continue to the next for loop (to speedup the process)
+                path_hist[path_idx].fetch_add(1);
+                continue;
+
+
                 path_t p = path_data.paths[path_idx];
                 if (p.step_count < 2) {
                     continue;
@@ -704,12 +760,15 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     auto start_compute = std::chrono::high_resolution_clock::now();
 #define USE_GPU
+// #define USE_CPU
+
 #ifdef USE_GPU
     std::cout << "cuda gpu layout" << std::endl;
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 
     const uint64_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
+    // uint64_t block_nbr = (config.min_term_updates / 10 + block_size - 1) / block_size;
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
@@ -721,6 +780,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     tmp_error = cudaDeviceSynchronize();
     std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     cudaFree(rnd_state_tmp);
+#endif
 
 #ifdef METRIC
     int blockSize = 1024;
@@ -731,17 +791,35 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaMallocManaged(&stress_partial_sum, numBlocks * sizeof(float));
 #endif
 
+#ifdef USE_GPU
+
+    // create a histogram vector to record the path selection
+    uint32_t *path_hist;
+    cudaMallocManaged(&path_hist, path_count * sizeof(uint32_t));
+    // initialize with 0
+    for (int i = 0; i < path_count; i++) {
+        path_hist[i] = 0;
+    }
+
+    // use standard curandState for each thread
+    curandState *rnd_state_std;
+    // tmp_error = cudaMallocManaged(&rnd_state_std, block_nbr * block_size * sizeof(curandState));
+    // std::cout << "CudaMallocManaged rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    // cuda_device_init_std<<<block_nbr, block_size>>>(rnd_state_std);
+    // tmp_error = cudaDeviceSynchronize();
+    // std::cout << "Standard rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+
     for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
+        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, path_hist, rnd_state_std);
         cudaError_t error = cudaDeviceSynchronize();
         if (error != cudaSuccess) {
             std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
         } else {
             std::cout << "Iteration[" << iter << "] ";
         }
-        
+#endif        
         // add a metric computing function here to print out the metric interactively during the layout process
-#ifdef METRIC        
+#ifdef METRIC
         cuda_compute_metric<<<numBlocks, blockSize, sharedMemSize>>>(stress_partial_sum, node_data, node_count);
         error = cudaDeviceSynchronize();
         // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;        
@@ -756,20 +834,61 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         stress_sum /= node_count;
         std::cout << "Node Stress: " << stress_sum;
 #endif
+#ifdef USE_GPU
         std::cout << std::endl;
         // cudaError_t error = cudaDeviceSynchronize();
         // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
-
-#else
-    cpu_layout(config, etas, zetas, node_data, path_data);
 #endif
+#ifdef USE_CPU
+    // create a path_hist vector to record the path selection. Should be atomic
+    std::atomic<uint32_t> *path_hist = new std::atomic<uint32_t>[path_count];
+    // initialize with 0
+    for (int i = 0; i < path_count; i++) {
+        path_hist[i] = 0;
+    }
+    cpu_layout(config, etas, zetas, node_data, path_data, path_hist);
+#endif
+
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
     // std::cout << "CUDA layout compute took " << duration_compute_ms << "ms" << std::endl;
     // in seconds
     std::cout << "CUDA layout kernel time: " << duration_compute_ms / 1000.0 << "s" << std::endl;
 
+
+    // combine the path histogran with path_handle
+    struct PathInfo {
+        odgi::path_handle_t path_handle;
+        uint32_t path_id;
+        uint32_t path_hit_count;
+    };
+
+    std::vector<PathInfo> path_info;
+    path_info.reserve(path_count);
+
+    for (int path_idx = 0; path_idx < path_count; path_idx++) {
+        PathInfo p;
+        p.path_handle = path_handles[path_idx];
+        p.path_id = path_idx;
+        p.path_hit_count = path_hist[path_idx];
+        path_info.push_back(p);
+    }
+
+
+    // sort path_info by path_hit_count, from the smallest to the largest
+    std::sort(path_info.begin(), path_info.end(), [](const PathInfo &a, const PathInfo &b) {
+        return a.path_hit_count < b.path_hit_count;
+    });
+
+
+    // print path info
+    std::cout << "Path info: " << std::endl;
+    for (int i = 0; i < path_count; i++) {
+        std::cout << "Path[" << path_info[i].path_id << "] " << 
+        graph.get_path_name(path_info[i].path_handle) << ": " << "hit count: " << path_info[i].path_hit_count << "; num_steps: " << graph.get_step_count(path_info[i].path_handle) << std::endl;
+    }
+    
 
 
     // copy coords back to X, Y vectors
@@ -799,6 +918,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaFree(zetas);
 #ifdef USE_GPU
     cudaFree(rnd_state);
+    cudaFree(rnd_state_std);
 #endif
 
 
