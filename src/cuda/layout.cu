@@ -129,6 +129,14 @@ __device__ uint32_t curand_coalesced(curandStateCoalesced_t *state, uint32_t thr
     return rnd_uint;
 }
 
+// use two uint32_t to form a uint64_t
+__device__ uint64_t curand_coalesced_uint64(curandStateCoalesced_t *state, uint32_t thread_id) {
+    uint32_t upper = curand_coalesced(state, thread_id);
+    uint32_t lower = curand_coalesced(state, thread_id);
+    uint64_t rnd_uint64 = (uint64_t(upper) << 32) | uint64_t(lower);
+    return rnd_uint64;
+}
+
 __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
     // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
     // also used in curand library (see curand_kernel.h)
@@ -222,7 +230,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     // each thread select its own path
     // uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_double_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
-    uint32_t step_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % path_data.total_path_steps;
+    // uint32_t step_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % path_data.total_path_steps;
+    uint32_t step_idx = uint32_t( curand_coalesced_uint64(thread_rnd_state, threadIdx.x) % uint64_t(path_data.total_path_steps) );
 
     // use standard curand_uniform to select path
     // uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform_double(&rnd_state_std[tid])) * double(path_data.total_path_steps)));
