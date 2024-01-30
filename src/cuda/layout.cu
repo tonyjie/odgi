@@ -74,6 +74,37 @@ __global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoales
     rnd_state[blockIdx.x].w4[threadIdx.x] = rnd_state_tmp[tid].v[4];
 }
 
+// curand_uniform_double. double format is necessary for the path selection, since there are some paths with very small number of steps. 
+// float format is not precise enough to generate some paths, e.g. path_steps = [500001, 5000002)
+__device__ double curand_uniform_double_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
+    // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
+    // also used in curand library (see curand_kernel.h)
+
+    // x = curand(state)
+    uint32_t t;
+    t = state->w0[thread_id] ^ (state->w0[thread_id] >> 2);
+    state->w0[thread_id] = state->w1[thread_id];
+    state->w1[thread_id] = state->w2[thread_id];
+    state->w2[thread_id] = state->w3[thread_id];
+    state->w3[thread_id] = state->w4[thread_id];
+    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
+    state->d[thread_id] += 362437;
+    uint32_t x = state->d[thread_id] + state->w4[thread_id];
+
+    // y = curand(state)
+    t = state->w0[thread_id] ^ (state->w0[thread_id] >> 2);
+    state->w0[thread_id] = state->w1[thread_id];
+    state->w1[thread_id] = state->w2[thread_id];
+    state->w2[thread_id] = state->w3[thread_id];
+    state->w3[thread_id] = state->w4[thread_id];
+    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
+    state->d[thread_id] += 362437;
+    uint32_t y = state->d[thread_id] + state->w4[thread_id];
+
+    // convert to float; see curand_uniform.h
+    return _curand_uniform_double_hq(x, y);
+}
+
 
 __device__ float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
     // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
@@ -152,7 +183,9 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     __shared__ uint32_t first_step_idx[32];
     if (threadIdx.x % 32 == 0) {
         // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+        // first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+        // use double format
+        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform_double_coalesced(thread_rnd_state, threadIdx.x)) * double(path_data.total_path_steps)));
         assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
     }
     __syncwarp();
