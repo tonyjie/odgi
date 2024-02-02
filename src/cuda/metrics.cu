@@ -117,13 +117,12 @@ void compute_node_crossing(cuda::node_data_t node_data, uint32_t N, int* blockSu
 
 
 void cuda_node_crossing(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout) {
-    printf("Hello World from CUDA host\n");
-
+    printf("CUDA kernel to compute node crossing\n");
 
 
 	// ========= Preprocessing: prepare data structure =========
     uint32_t node_count = graph.get_node_count();
-    std::cout << "node_count: " << node_count << std::endl;
+    // std::cout << "node_count: " << node_count << std::endl;
     assert(graph.min_node_id() == 1);
     assert(graph.max_node_id() == node_count);
     assert(graph.max_node_id() - graph.min_node_id() + 1 == node_count);
@@ -154,7 +153,7 @@ void cuda_node_crossing(const odgi::graph_t &graph, odgi::algorithms::layout::La
     int sharedMemSize = blockSize * sizeof(int);
     int numBlocks = (node_count + blockSize - 1) / blockSize;
 
-    std::cout << "numBlocks: " << numBlocks << ", blockSize: " << blockSize << std::endl;
+    // std::cout << "numBlocks: " << numBlocks << ", blockSize: " << blockSize << std::endl;
 
     int* blockSums; // partial sum for each block
     cudaMallocManaged(&blockSums, numBlocks * sizeof(int));
@@ -168,12 +167,29 @@ void cuda_node_crossing(const odgi::graph_t &graph, odgi::algorithms::layout::La
     #pragma openmp parallel for reduction(+:total_node_crossing)
     for (int i = 0; i < numBlocks; i++) {
         total_node_crossing += blockSums[i];
-        cout << "block " << i << " has " << blockSums[i] << " node-crossing" << endl;
+        // cout << "block " << i << " has " << blockSums[i] << " node-crossing" << endl;
     }
     std::cout << "total_node_crossing: " << total_node_crossing << std::endl;
 
 
     return;
 }
+
+/*
+* CUDA host function to compute the path stress: ALL layout_node pairs within each path, and sums up. 
+*/
+void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout) {
+    printf("CUDA kernel to compute path stress\n");
+
+    // Preprocessing: prepare data structure
+    
+
+
+
+
+
+    return;
+}
+
 
 } // namespace cuda

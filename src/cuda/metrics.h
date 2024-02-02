@@ -33,5 +33,6 @@ struct node_data_t {
 
 void cuda_node_crossing(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout);
 
+void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout);
 
 } // namespace cuda

@@ -110,6 +110,8 @@ int main_tension(int argc, char **argv) {
 	args::Flag node_crossing(tension_opts, "node-crossing", "compute the number of node-crossing", {'x', "node-crossing"});
 	// avg_path_len_error
     args::Flag avg_path_len_error(tension_opts, "avg-path-len-error", "compute the average path length error", {'e', "avg-path-len-error"});
+    // path_stress
+    args::Flag path_stress(tension_opts, "path-stress", "compute the path-stress", {'p', "path-stress"});
 
 	args::Group threading_opts(parser, "[ Threading ]");
 	args::ValueFlag<uint64_t> nthreads(parser, "N", "number of threads to use for parallel phases", {'t', "threads"});
@@ -182,6 +184,8 @@ int main_tension(int argc, char **argv) {
 
 // ===== 1. Check the number of node crossings. =====
 	if (node_crossing) {
+        
+#ifdef CPU_NODE_CROSSING
 		cout << "compute the number of node-crossing using CPUs" << endl;
 
 		// save a vector of all the node handle_t
@@ -213,6 +217,7 @@ int main_tension(int argc, char **argv) {
 		}
 
 		cout << "node-crossing: " << num_node_crossing << " / " << nodes.size() * (nodes.size() - 1) / 2 << " = " << (double)num_node_crossing / (double)(nodes.size() * (nodes.size() - 1) / 2) << endl;
+#endif
 
 		// cout << "===== GPU version to compute # of node crossings =====" << endl;
 		// // GPU version of computing node-crossing
@@ -411,7 +416,7 @@ int main_tension(int argc, char **argv) {
 
 
 
-
+    // ===== 5. Check the old node-stress =====
     if (old_node_stress) {
 	// The original node-stress. There are two differences compared to the above new node-stress. 
 	// 1. First iterate through paths, then iterate through each step (node) in the path. 
@@ -505,6 +510,16 @@ int main_tension(int argc, char **argv) {
 
         std::cout << "stress: " << stress_result << std::endl;
     } // end of old_node_stress
+
+    
+    // ===== 6. Check the Path-Stress using GPU =====
+    // Path stress considers ALL the layout_node pairs within each path, and sums up the stress. 
+    // Its O(P*N*N) complexity requires the GPU kernel. 
+    if (path_stress) {
+        cout << "compute the path-stress using GPU" << endl;
+        cuda::cuda_path_stress(graph, layout);
+    }
+
 
 
     return 0;
