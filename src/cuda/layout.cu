@@ -771,7 +771,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         if (error != cudaSuccess) {
             std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
         } else {
-            std::cout << "Iteration[" << iter << "] ";
+            // std::cout << "Iteration[" << iter << "] ";
         }
         
         // add a metric computing function here to print out the metric interactively during the layout process
@@ -790,7 +790,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         stress_sum /= node_count;
         std::cout << "Node Stress: " << stress_sum;
 #endif
-        std::cout << std::endl;
+        // std::cout << std::endl;
         // cudaError_t error = cudaDeviceSynchronize();
         // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
