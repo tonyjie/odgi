@@ -7,6 +7,7 @@
 #include "algorithms/tension/tension_bed_records_queued_writer.hpp"
 #include <numeric>
 #include "progress.hpp"
+#include "cuda/metrics.h"
 
 namespace odgi {
 
@@ -172,6 +173,12 @@ int main_tension(int argc, char **argv) {
         }
     }
 
+	// Save the path of the graph
+	std::vector<odgi::path_handle_t> paths;
+	graph.for_each_path_handle([&] (const odgi::path_handle_t &p) {
+		paths.push_back(p);
+	});
+
 
 // ===== 1. Check the number of node crossings. =====
 	if (node_crossing) {
@@ -210,17 +217,11 @@ int main_tension(int argc, char **argv) {
 		// cout << "===== GPU version to compute # of node crossings =====" << endl;
 		// // GPU version of computing node-crossing
 		// // O(N*N) complexity. For Chr1 with N=1.1e7, it takes 131min. 
-		// cuda::cuda_node_crossing(graph, layout);
+
+        cout << "===== GPU version to compute # of node crossings =====" << endl;
+		cuda::cuda_node_crossing(graph, layout);
 
 	}
-
-
-	// check the length of each path in the layout
-	std::vector<odgi::path_handle_t> paths;
-	graph.for_each_path_handle([&] (const odgi::path_handle_t &p) {
-		paths.push_back(p);
-	});
-
 
 // ===== 2. Check the average path length error =====
     struct PathInfo {

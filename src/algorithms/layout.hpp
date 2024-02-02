@@ -1,3 +1,4 @@
+#pragma once
 #include <iostream>
 #include <sdsl/enc_vector.hpp>
 #include <handlegraph/handle_graph.hpp>
