@@ -466,9 +466,7 @@ void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layo
 
     std::cout << "Preprocessing done" << std::endl;
 
-    // int sample_factor = 10; // sample each step for 10 times
-    int sample_factor = 50;
-    uint64_t total_term_count = path_data.total_path_steps * sample_factor;
+    uint64_t total_term_count = path_data.total_path_steps * SAMPLE_FACTOR;
     const uint32_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (total_term_count + block_size - 1) / block_size;
 

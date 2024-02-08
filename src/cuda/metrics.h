@@ -18,6 +18,7 @@ namespace cuda {
 
 #define BLOCK_SIZE 1024
 #define SM_COUNT 84
+#define SAMPLE_FACTOR 10 // for sampled-path-stress
 
 struct Point 
 { 
