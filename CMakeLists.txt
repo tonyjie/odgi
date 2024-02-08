@@ -622,6 +622,7 @@ add_library(odgi_objs OBJECT
   ${CMAKE_SOURCE_DIR}/src/algorithms/diffpriv.cpp
   ${CMAKE_SOURCE_DIR}/src/cuda/test.cu
   ${CMAKE_SOURCE_DIR}/src/cuda/layout.cu
+  ${CMAKE_SOURCE_DIR}/src/cuda/metrics.cu
   ${lodepng_SOURCES}
   ${handlegraph_sources}
 )
@@ -809,7 +810,8 @@ set(odgi_HEADERS
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_keep.hpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/diffpriv.cpp
   ${CMAKE_SOURCE_DIR}/src/cuda/test.h
-  ${CMAKE_SOURCE_DIR}/src/cuda/layout.h)
+  ${CMAKE_SOURCE_DIR}/src/cuda/layout.h
+  ${CMAKE_SOURCE_DIR}/src/cuda/metrics.h)
 
 target_include_directories(odgi_objs PUBLIC ${odgi_INCLUDES})
 # arch and gencode are configured for our GPU (RTX A6000)
