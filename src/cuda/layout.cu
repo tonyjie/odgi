@@ -218,14 +218,14 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(p.step_count > 1);
 
     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
+    uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count))); // TODO: change to %
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
     if (cooling[threadIdx.x / 32]) {
         bool backward;
         uint32_t jump_space;
-        if (s1_idx > 0 && (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
+        if (s1_idx > 0 && (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) { // TODO: change to %
             // go backward
             backward = true;
             jump_space = min(config.space, s1_idx);

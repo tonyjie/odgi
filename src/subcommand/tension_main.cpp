@@ -184,7 +184,7 @@ int main_tension(int argc, char **argv) {
 
 // ===== 1. Check the number of node crossings. =====
 	if (node_crossing) {
-        
+// #define CPU_NODE_CROSSING
 #ifdef CPU_NODE_CROSSING
 		cout << "compute the number of node-crossing using CPUs" << endl;
 
@@ -517,7 +517,7 @@ int main_tension(int argc, char **argv) {
     // Its O(P*N*N) complexity requires the GPU kernel. 
     if (path_stress) {
         cout << "compute the path-stress using GPU" << endl;
-        cuda::cuda_path_stress(graph, layout);
+        cuda::cuda_path_stress(graph, layout, nthreads);
     }
 
 
