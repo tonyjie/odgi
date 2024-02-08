@@ -185,7 +185,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     __shared__ uint32_t first_step_idx[BLOCK_SIZE / WARP_SIZE]; // BLOCK_SIZE/WARP_SIZE = 1024/32 = 32
     if (threadIdx.x % WARP_SIZE == 0) {
         // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-        first_step_idx[threadIdx.x / WARP_SIZE] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+        // first_step_idx[threadIdx.x / WARP_SIZE] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
+        first_step_idx[threadIdx.x / WARP_SIZE] = curand_coalesced(thread_rnd_state, threadIdx.x) % path_data.total_path_steps; // need to change to int and % to avoid the numerical issue
         assert(first_step_idx[threadIdx.x / WARP_SIZE] < path_data.total_path_steps);
     }
     __syncwarp();
@@ -201,14 +202,16 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(p.step_count > 1);
 
     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
+    // uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
+    uint32_t s1_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % p.step_count;
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
     if (cooling[threadIdx.x / WARP_SIZE]) {
         bool backward;
         uint32_t jump_space;
-        if (s1_idx > 0 && (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
+        // if (s1_idx > 0 && (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
+        if (s1_idx > 0 && (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) || s1_idx == p.step_count-1) {
             // go backward
             backward = true;
             jump_space = min(config.space, s1_idx);
@@ -243,7 +246,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         s2_idx = backward? s1_idx - z_i: s1_idx + z_i;
     } else {
         do {
-            s2_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
+            // s2_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
+            s2_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % p.step_count;
         } while (s1_idx == s2_idx);
     }
     assert(s1_idx < p.step_count);
@@ -262,7 +266,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     n2_pos_in_path = std::abs(n2_pos_in_path);
 
     uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
-    bool n1_use_other_end = (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5)? true: false;
+    // bool n1_use_other_end = (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5)? true: false;
+    bool n1_use_other_end = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0)? true: false;
     if (n1_use_other_end) {
         n1_pos_in_path += uint64_t{n1_seq_length};
         n1_use_other_end = !n1_is_rev;
@@ -271,7 +276,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
 
     uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
-    bool n2_use_other_end = (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5)? true: false;
+    // bool n2_use_other_end = (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5)? true: false;
+    bool n2_use_other_end = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0)? true: false;
     if (n2_use_other_end) {
         n2_pos_in_path += uint64_t{n2_seq_length};
         n2_use_other_end = !n2_is_rev;
