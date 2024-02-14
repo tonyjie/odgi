@@ -4,6 +4,9 @@
 #include <iostream>
 #include <cuda.h>
 
+// #define LOG_STRESS
+// for geometric mean of each term's stress. 
+
 namespace cuda {
 
 
@@ -332,8 +335,13 @@ void compute_sampled_path_stress(cuda::node_data_t node_data, cuda::path_data_t 
     // now each thread has a stress value, we need to sum up the stress of all node-pairs
     // NEXT: Then we need to sum up the stress of all node-pairs
     extern __shared__ double sharedStress[];
+
+#ifdef LOG_STRESS
     // now we count geometric mean. so need to take log. Have to take log(1+stress) to avoid log(0) -> -inf
     sharedStress[threadIdx.x] = log(stress + 1);
+#else
+    sharedStress[threadIdx.x] = stress;
+#endif
     // DEBUG: print it out
     // if (threadIdx.x == 0) {
     //     printf("tid: %d, log(stress+1): %f\n", tid, log(stress+1));
@@ -526,8 +534,10 @@ void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layo
 
     // normalized by total_term_count
     total_path_stress /= (total_term_count - total_ignr_count);
+#ifdef LOG_STRESS
     // exponentiate to get geometric mean
     total_path_stress = exp(total_path_stress);
+#endif
     std::cout << "path_stress: " << total_path_stress << std::endl;
     std::cout << "total_ignr_count: " << total_ignr_count << std::endl;
 
