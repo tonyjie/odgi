@@ -178,7 +178,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     __shared__ bool cooling[BLOCK_SIZE / WARP_SIZE]; // This [32] is actually BLOCK_SIZE/WARP_SIZE = 1024/32 = 32. Not good to hardcode. 
     if (threadIdx.x % WARP_SIZE == 1) {
-        cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5);
+        // cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5);
+        cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0);
     }
 
     // select path
