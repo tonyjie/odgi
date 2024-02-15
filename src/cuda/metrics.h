@@ -18,7 +18,7 @@ namespace cuda {
 
 #define BLOCK_SIZE 1024
 #define SM_COUNT 84
-#define SAMPLE_FACTOR 10 // for sampled-path-stress
+#define SAMPLE_FACTOR 100 // for sampled-path-stress
 
 struct Point 
 { 
@@ -50,7 +50,7 @@ struct path_t {
 
 struct path_data_t {
     uint32_t path_count;
-    uint32_t total_path_steps;
+    uint64_t total_path_steps;
     path_t *paths;
     path_element_t *element_array;
 };
