@@ -442,7 +442,7 @@ void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layo
 #endif
 
     // get length and starting position of all paths
-    uint32_t first_step_counter = 0;
+    uint64_t first_step_counter = 0;
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
         odgi::path_handle_t p = path_handles[path_idx];
         int step_count = graph.get_step_count(p);

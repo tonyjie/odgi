@@ -45,7 +45,7 @@ struct path_t {
 
 struct path_data_t {
     uint32_t path_count;
-    uint32_t total_path_steps;
+    uint64_t total_path_steps;
     path_t *paths;
     path_element_t *element_array;
 };
