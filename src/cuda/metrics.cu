@@ -7,6 +7,9 @@
 // #define LOG_STRESS
 // for geometric mean of each term's stress. 
 
+// #define COUNT_TIME
+// #define DEBUG
+
 namespace cuda {
 
 
@@ -384,6 +387,11 @@ void compute_sampled_path_stress(cuda::node_data_t node_data, cuda::path_data_t 
 void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout, int nthreads) {
     printf("CUDA kernel to compute path stress\n");
 
+#ifdef COUNT_TIME
+    // start time
+    auto start_preprocess = std::chrono::high_resolution_clock::now();
+#endif    
+
     // Preprocessing: prepare data structure
     uint32_t node_count = graph.get_node_count();
     // std::cout << "node_count: " << node_count << std::endl;
@@ -426,6 +434,13 @@ void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layo
         });
     cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
 
+#ifdef DEBUG
+    std::cout << "total_path_steps: " << path_data.total_path_steps << std::endl;
+    uint64_t total_term_count_check = path_data.total_path_steps * SAMPLE_FACTOR;
+    std::cout << "total_term_count_check: " << total_term_count_check << std::endl;
+    exit(0);
+#endif
+
     // get length and starting position of all paths
     uint32_t first_step_counter = 0;
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
@@ -442,7 +457,7 @@ void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layo
         //std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
 
         uint32_t step_count = path_data.paths[path_idx].step_count;
-        uint32_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
+        uint64_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
         if (step_count == 0) {
             path_data.paths[path_idx].elements = NULL;
         } else {
@@ -497,6 +512,16 @@ void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layo
     std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     cudaFree(rnd_state_tmp);
 
+#ifdef COUNT_TIME
+    // end time of preprocessing
+    auto end_preprocess = std::chrono::high_resolution_clock::now();
+    uint32_t duration_preprocess = std::chrono::duration_cast<std::chrono::seconds>(end_preprocess - start_preprocess).count();
+    std::cout << "Preprocessing time: " << (float)duration_preprocess << " s" << std::endl;
+
+    // start time of kernel
+    auto start_kernel = std::chrono::high_resolution_clock::now();
+#endif
+
     // blockSums: partial sum for each block
     double *blockSums;
     cudaMallocManaged(&blockSums, block_nbr * sizeof(double));
@@ -515,6 +540,14 @@ void cuda_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layo
     if (error != cudaSuccess) {
         std::cerr << "CUDA error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
+
+#ifdef COUNT_TIME
+    // end time of kernel
+    auto end_kernel = std::chrono::high_resolution_clock::now();
+    uint32_t duration_kernel = std::chrono::duration_cast<std::chrono::seconds>(end_kernel - start_kernel).count();
+    // std::cout << "Kernel time: " << (float)duration_kernel_ms / 1000 << " s" << std::endl;
+    std::cout << "Kernel time: " << duration_kernel << " s" << std::endl;
+#endif
 
     // Sum the block sums
     double total_path_stress = 0;
