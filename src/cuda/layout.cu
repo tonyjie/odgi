@@ -646,7 +646,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
 
     // get length and starting position of all paths
-    uint32_t first_step_counter = 0;
+    uint64_t first_step_counter = 0;
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
         odgi::path_handle_t p = path_handles[path_idx];
         int step_count = graph.get_step_count(p);
@@ -661,7 +661,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         //std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
 
         uint32_t step_count = path_data.paths[path_idx].step_count;
-        uint32_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
+        uint64_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
         if (step_count == 0) {
             path_data.paths[path_idx].elements = NULL;
         } else {
