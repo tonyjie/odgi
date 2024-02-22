@@ -2,6 +2,7 @@
 #include <cuda.h>
 #include <assert.h>
 
+// #define PRINT_INFO // whether to print some parameters
 
 namespace cuda {
 
@@ -184,6 +185,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     // select path
     __shared__ uint32_t first_step_idx[BLOCK_SIZE / WARP_SIZE]; // BLOCK_SIZE/WARP_SIZE = 1024/32 = 32
+#ifdef WARP_SAME_PATH
     if (threadIdx.x % WARP_SIZE == 0) {
         // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
         // first_step_idx[threadIdx.x / WARP_SIZE] = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(path_data.total_path_steps)));
@@ -194,6 +196,10 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     // find path of step of specific thread with LUT (threads in one warp pick the same path `p`)
     uint32_t step_idx = first_step_idx[threadIdx.x / WARP_SIZE];
+#else
+    // each thread picks its own path
+    uint32_t step_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % path_data.total_path_steps;
+#endif
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
     path_t p = path_data.paths[path_idx];
 
@@ -572,6 +578,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 // #define STEP_DECREASE_FACTOR 1.75
     double STEP_DECREASE_FACTOR = config.gpu_step_decrease_factor;
 
+#ifdef PRINT_INFO
     // std::cout << "Hello world from CUDA host" << std::endl;
     std::cout << "===== GPU Layout Parameters =====" << std::endl;
     std::cout << "iter_max: " << config.iter_max << std::endl;
@@ -579,7 +586,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "min_term_updates: " << config.min_term_updates << std::endl;
     std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
     std::cout << "theta: " << config.theta << std::endl;
-
+#endif
     std::cout << "===== GPU Data Reuse Parameters =====" << std::endl;
     std::cout << "gpu_data_reuse_factor: " << config.gpu_data_reuse_factor << "\t" << "gpu_step_decrease_factor: " << config.gpu_step_decrease_factor << std::endl;
 
@@ -604,7 +611,9 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // create node data structure
     // consisting of sequence length and coords
     uint32_t node_count = graph.get_node_count();
+#ifdef PRINT_INFO
     std::cout << "node_count: " << node_count << std::endl;
+#endif
     assert(graph.min_node_id() == 1);
     assert(graph.max_node_id() == node_count);
     assert(graph.max_node_id() - graph.min_node_id() + 1 == node_count);
@@ -701,11 +710,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto start_zeta = std::chrono::high_resolution_clock::now();
     double *zetas;
     uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
+#ifdef PRINT_INFO
     std::cout << "zetas_cnt: " << zetas_cnt << std::endl;
     std::cout << "space_max: " << config.space_max << std::endl;
     std::cout << "config.space: " << config.space << std::endl;
     std::cout << "config.space_quantization: " << config.space_quantization_step << std::endl;
-
+#endif
     cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
     double zeta_tmp = 0.0;
     for (uint64_t i = 1; i < config.space + 1; i++) {
@@ -719,22 +729,25 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     }
     auto end_zeta = std::chrono::high_resolution_clock::now();
     uint32_t duration_zeta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_zeta - start_zeta).count();
+#ifdef PRINT_INFO
     std::cout << "Zeta precompute took " << duration_zeta_ms << "ms" << std::endl;
-
+#endif
 
     auto start_compute = std::chrono::high_resolution_clock::now();
 #define USE_GPU
 #ifdef USE_GPU
+#ifdef PRINT_INFO
     // std::cout << "cuda gpu layout" << std::endl;
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
-
+#endif
     const uint64_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
 
     // block_nbr = block_nbr / STEP_DECREASE_FACTOR; but note the type conversion
     block_nbr = uint64_t(double(block_nbr) / STEP_DECREASE_FACTOR);   
-
+#ifdef PRINT_INFO
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
+#endif
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
     cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));

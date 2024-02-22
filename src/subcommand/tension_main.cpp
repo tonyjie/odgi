@@ -112,6 +112,8 @@ int main_tension(int argc, char **argv) {
     args::Flag avg_path_len_error(tension_opts, "avg-path-len-error", "compute the average path length error", {'e', "avg-path-len-error"});
     // path_stress
     args::Flag path_stress(tension_opts, "path-stress", "compute the path-stress", {'p', "path-stress"});
+    // all_path_stress
+    args::Flag all_path_stress(tension_opts, "all-path-stress", "compute the all-pair path-stress", {'a', "all-path-stress"});
 
 	args::Group threading_opts(parser, "[ Threading ]");
 	args::ValueFlag<uint64_t> nthreads(parser, "N", "number of threads to use for parallel phases", {'t', "threads"});
@@ -512,14 +514,22 @@ int main_tension(int argc, char **argv) {
     } // end of old_node_stress
 
     
-    // ===== 6. Check the Path-Stress using GPU =====
-    // Path stress considers ALL the layout_node pairs within each path, and sums up the stress. 
-    // Its O(P*N*N) complexity requires the GPU kernel. 
+    // ===== 6. Check the Sampled Path-Stress using GPU =====
+    // Sampled path-stress sample several pairs of layout_node within each path, and sums up the stress. 
+    // The number of sampling pairs is controlled by "SAMPLE_FACTOR". 
     if (path_stress) {
-        cout << "compute the path-stress using GPU" << endl;
-        cuda::cuda_path_stress(graph, layout, nthreads);
+        cout << "compute the sampled path-stress using GPU" << endl;
+        cuda::cuda_sampled_path_stress(graph, layout, nthreads);
     }
 
+    // ===== 7. Check the All-pair Path-Stress using GPU =====
+    // Very time-consuming for large chromosomes. Used to justify the sampled path stress
+    // Path stress considers ALL the layout_node pairs within each path, and sums up the stress. 
+    // Its O(P*N*N) complexity requires the GPU kernel. 
+    if (all_path_stress) {
+        cout << "compute the all-pair path-stress using GPU" << endl;
+        cuda::cuda_all_pair_path_stress(graph, layout, nthreads);
+    }
 
 
     return 0;
