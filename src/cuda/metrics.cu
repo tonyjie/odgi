@@ -13,6 +13,8 @@
 
 #define PRINT_INFO
 
+#define STDDEV
+
 namespace cuda {
 
 
@@ -212,6 +214,7 @@ void cuda_device_init_metric(curandState_t *rnd_state_tmp, curandStateCoalesced_
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     // initialize curandState with original curand implementation
     curand_init(42+tid, tid, 0, &rnd_state_tmp[tid]);
+    // curand_init(clock64()+tid, tid, 0, &rnd_state_tmp[tid]);
     // copy to coalesced data structure
     rnd_state[blockIdx.x].d[threadIdx.x] = rnd_state_tmp[tid].d;
     rnd_state[blockIdx.x].w0[threadIdx.x] = rnd_state_tmp[tid].v[0];
@@ -227,6 +230,182 @@ static __device__ __inline__ uint32_t __mysmid(){
     asm volatile("mov.u32 %0, %%smid;" : "=r"(smid));
     return smid;
 }
+
+#ifdef STDDEV
+/*
+* CUDA kernel to compute the STDDEV for sampled path stress
+*/
+__global__
+void compute_sampled_stress_stddev(cuda::node_data_t node_data, cuda::path_data_t path_data, uint64_t total_term_count, curandStateCoalesced_t *rnd_state, double *blockSums, int *ignr_sums, double mean_stress) {
+    uint64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    double stress = 0; // each threaed counts the stress of a node-pair
+    int ignr_count = 0; // count the number of node-pairs that are directly connected
+
+    if (tid < total_term_count) { // if the thread is doing something
+
+        uint32_t smid = __mysmid();
+        assert(smid < 84);
+        curandStateCoalesced_t *thread_rnd_state = &rnd_state[smid];
+
+        // select path
+        uint32_t step_idx = cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % path_data.total_path_steps;
+        uint32_t path_idx = path_data.element_array[step_idx].pidx;
+
+        path_t p = path_data.paths[path_idx];
+
+        uint32_t s1_idx, s2_idx, n1_id, n2_id;
+        int n1_offset, n2_offset;
+        double term_dist, layout_dist; // ground-truth and layout distance of a node-pair
+
+        if (p.step_count == 1) { // single-node path
+            // TODO: count this specific node's stress
+            n1_id = p.elements[0].node_id;
+            n2_id = n1_id;
+            uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length; 
+            term_dist = n1_seq_length; // ground-truth distance
+            n1_offset = 0; 
+            n2_offset = 2;
+        } // end of single-node path 
+        else { // normal scenario
+
+            s1_idx = cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % p.step_count;
+            assert(s1_idx < p.step_count);
+            do {
+                s2_idx = cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % p.step_count;
+            } while (s2_idx == s1_idx);
+            
+            assert(s1_idx < p.step_count);
+            assert(s2_idx < p.step_count);
+            assert(s1_idx != s2_idx);
+
+            n1_id = p.elements[s1_idx].node_id;
+            int64_t n1_pos_in_path = p.elements[s1_idx].pos;
+            bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
+            n1_pos_in_path = std::abs(n1_pos_in_path);
+
+            n2_id = p.elements[s2_idx].node_id;
+            int64_t n2_pos_in_path = p.elements[s2_idx].pos;
+            bool n2_is_rev = (n2_pos_in_path < 0)? true: false;
+            n2_pos_in_path = std::abs(n2_pos_in_path);    
+            
+            uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
+            bool n1_use_other_end = (cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % 2 == 0) ? true: false;
+            if (n1_use_other_end) {
+                n1_pos_in_path += uint64_t(n1_seq_length);
+                n1_use_other_end = !n1_is_rev;
+            } else {
+                n1_use_other_end = n1_is_rev;
+            }
+
+            uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
+            bool n2_use_other_end =(cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % 2 == 0) ? true: false;
+            if (n2_use_other_end) {
+                n2_pos_in_path += uint64_t(n2_seq_length);
+                n2_use_other_end = !n2_is_rev;
+            } else {
+                n2_use_other_end = n2_is_rev;
+            }    
+
+            term_dist = std::abs(n1_pos_in_path - n2_pos_in_path); // ground-truth distance of a node-pair
+            // if (term_dist < 1e-9) { // we want to skip these connected nodes, since their ground-truth distance is 0, which leads to too large stress for a single term
+            //     term_dist = 100;
+            // }
+            
+            n1_offset = n1_use_other_end ? 2: 0;
+            n2_offset = n2_use_other_end ? 2: 0;
+
+            // if (threadIdx.x == 0) {
+            //     // printf("tid: %d, term_dist: %f\n", tid, term_dist);
+            // }
+
+        } // end of normal scenario
+
+        if (term_dist < 1e-9) { // we want to skip these connected nodes, since their ground-truth distance is 0, which leads to too large stress for a single term
+            stress = 0;
+            ignr_count++;
+        } else { // normal case: node-pair not directly connected
+
+            float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
+            float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
+            float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
+            float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+            double x1_val = double(*x1);
+            double x2_val = double(*x2);
+            double y1_val = double(*y1);
+            double y2_val = double(*y2);    
+
+            layout_dist = std::sqrt(std::pow(x1_val - x2_val, 2) + std::pow(y1_val - y2_val, 2)); // layout distance of a node-pair
+            // compute the stress
+            stress = std::pow( ((layout_dist - term_dist) / term_dist), 2);
+
+            // [STDEV] compute standard deviation. Here for simplicty just reuse the stress variable. 
+            stress = std::pow( (stress - mean_stress), 2);
+
+        }
+
+#ifdef DEBUG
+    // if stress is very large, print out the node-pair
+    if (stress > 1e16) {
+    // if (term_dist == 1) {
+        // get the current path
+        printf("path_idx: %d, path_step_count: %d\n", path_idx, p.step_count);
+
+        printf("tid: %ld, stress: %f, term_dist: %f, layout_dist: %f, n1_id: %d, n2_id: %d, n1_offset: %d, n2_offset: %d\n", tid, stress, term_dist, layout_dist, n1_id, n2_id, n1_offset, n2_offset);
+    }
+#endif
+
+    } // end of if the thread is doing something
+
+
+    // now each thread has a stress value, we need to sum up the stress of all node-pairs
+    // NEXT: Then we need to sum up the stress of all node-pairs
+    extern __shared__ double sharedStress[];
+
+#ifdef LOG_STRESS
+    // now we count geometric mean. so need to take log. Have to take log(1+stress) to avoid log(0) -> -inf
+    sharedStress[threadIdx.x] = log(stress + 1);
+#else
+    sharedStress[threadIdx.x] = stress;
+#endif
+    // DEBUG: print it out
+    // if (threadIdx.x == 0) {
+    //     printf("tid: %d, log(stress+1): %f\n", tid, log(stress+1));
+    // }
+
+    __syncthreads();
+
+
+
+    // Reduction
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            sharedStress[threadIdx.x] += sharedStress[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    // Store the partial sum
+    if (threadIdx.x == 0) {
+        blockSums[blockIdx.x] = sharedStress[0];
+    }
+
+    // sum up the number of node-pairs that are directly connected
+    extern __shared__ int sharedIgnrCount[];
+    sharedIgnrCount[threadIdx.x] = ignr_count;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            sharedIgnrCount[threadIdx.x] += sharedIgnrCount[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        ignr_sums[blockIdx.x] = sharedIgnrCount[0];
+    }
+
+}
+#endif
+
+
 
 /*
 * CUDA kernel to compute the sampled path stress
@@ -655,7 +834,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
 
 #endif
 
-#ifdef DEBUG
+#ifdef DEBUG_DETAIL
 
 
 #ifdef DEBUG_CHR16
@@ -987,6 +1166,77 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     std::cout << "path_stress: " << total_path_stress << std::endl;
     std::cout << "total_ignr_count: " << total_ignr_count << std::endl;
 
+#ifdef STDDEV
+    double mean_stress = total_path_stress;
+    // another pass to compute the standard deviation
+
+    std::cout << "Compute STDDEV......" << std::endl;
+    // initialize random states
+    tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));        
+    if (tmp_error != cudaSuccess) {
+        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    }
+    tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
+    if (tmp_error != cudaSuccess) {
+        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    }
+    cuda_device_init_metric<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);    
+    tmp_error = cudaDeviceSynchronize();
+    if (tmp_error != cudaSuccess) {
+        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    }
+    cudaFree(rnd_state_tmp);
+
+    // change to compute STDDEV
+    compute_sampled_stress_stddev<<<block_nbr, block_size, sharedMemSize>>>(node_data, path_data, total_term_count, rnd_state, blockSums, ignrSums, mean_stress);
+    // check for errors
+    cudaDeviceSynchronize();
+    // check errors
+    error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        std::cerr << "CUDA error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+    }
+
+    // Sum the block sums
+    double total_std_dev = 0;
+    #pragma openmp parallel for reduction(+:total_std_dev)
+    for (int i = 0; i < block_nbr; i++) {
+        total_std_dev += blockSums[i];
+#ifdef DEBUG_BLOCK
+        // DEBUG: print the blockSums
+        // std::cout << "block " << i << " has " << blockSums[i] << " stress" << std::endl;
+        
+        // if blockSums are very large, print out the blockSums
+        if (blockSums[i] > block_size * 1000) {
+            std::cout << "block " << i << " has " << blockSums[i] << " stress" << std::endl;
+        }
+#endif
+    }
+
+
+    // Sum the block sums for ignrSums
+    total_ignr_count = 0;
+    #pragma openmp parallel for reduction(+:total_ignr_count)
+    for (int i = 0; i < block_nbr; i++) {
+        total_ignr_count += ignrSums[i];
+    }    
+
+    // final stddev
+    double stddev = std::sqrt(total_std_dev / (total_term_count - total_ignr_count));
+
+    std::cout << "stddev: " << stddev << std::endl;
+    std::cout << "ignr_count: " << total_ignr_count << std::endl;
+
+    // 95% confidence interval
+    double stddev_div_sqrtn = stddev / std::sqrt(total_term_count - total_ignr_count);
+    double conf_interval = 1.96 * stddev_div_sqrtn;
+    double conf_interval_low = mean_stress - conf_interval;
+    double conf_interval_high = mean_stress + conf_interval;
+
+    std::cout << "conf interval: " << conf_interval << std::endl;
+    std::cout << "95% confidence interval: [" << conf_interval_low << ", " << conf_interval_high << "]" << std::endl;
+
+#endif
     
 
     // free memory
