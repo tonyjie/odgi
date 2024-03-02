@@ -2,7 +2,26 @@
 #include <cuda.h>
 #include <assert.h>
 
+#include "nccl.h"
 // #define PRINT_INFO // whether to print some parameters
+
+#define CUDACHECK(cmd) do {                         \
+  cudaError_t err = cmd;                            \
+  if (err != cudaSuccess) {                         \
+    printf("Failed: Cuda error %s:%d '%s'\n",       \
+        __FILE__,__LINE__,cudaGetErrorString(err)); \
+    exit(EXIT_FAILURE);                             \
+  }                                                 \
+} while(0)
+
+#define NCCLCHECK(cmd) do {                         \
+  ncclResult_t res = cmd;                           \
+  if (res != ncclSuccess) {                         \
+    printf("Failed, NCCL error %s:%d '%s'\n",       \
+        __FILE__,__LINE__,ncclGetErrorString(res)); \
+    exit(EXIT_FAILURE);                             \
+  }                                                 \
+} while(0)
 
 namespace cuda {
 
@@ -570,6 +589,25 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 
 
 void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
+
+    ncclComm_t comms[4];
+    int nDev = 4;
+    int devs[4] = { 0, 1, 2, 3 };
+    // Initializing NCCL
+    NCCLCHECK(ncclCommInitAll(comms, nDev, devs));
+
+    // Finalizing NCCL
+    for (int i = 0; i < nDev; ++i) {
+        ncclCommDestroy(comms[i]);
+    }
+
+
+
+
+
+
+
+
 
 #ifdef cuda_layout_profiling
     auto start = std::chrono::high_resolution_clock::now();

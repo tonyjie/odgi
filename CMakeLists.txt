@@ -700,6 +700,7 @@ set(odgi_LIBS
   ${libbf_lib}
   "-ldl"
   "-latomic"
+  "-lnccl"
   )
   #"-lefence") # for malloc error checking
   #"-ltcmalloc") # for heap profiling
