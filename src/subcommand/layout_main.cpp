@@ -342,6 +342,7 @@ int main_layout(int argc, char **argv) {
 
     //double max_x = 0;
 
+    auto& layout_file_name = args::get(layout_out_file);
     // run on gpu
     if (gpu_compute) {
         algorithms::path_linear_sgd_layout_gpu(
@@ -366,7 +367,8 @@ int main_layout(int argc, char **argv) {
             graph_X,
             graph_Y, 
             gpu_data_reuse_factor,
-            gpu_step_decrease_factor
+            gpu_step_decrease_factor, 
+            layout_file_name
             );
     } else {
         algorithms::path_linear_sgd_layout(

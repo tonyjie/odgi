@@ -1,6 +1,12 @@
 #include "layout.h"
 #include <cuda.h>
 #include <assert.h>
+#include "algorithms/xp.hpp"
+#include "algorithms/sgd_layout.hpp"
+#include "algorithms/path_sgd_layout.hpp"
+#include "algorithms/draw.hpp"
+#include "algorithms/layout.hpp"
+#include "algorithms/weakly_connected_components.hpp"
 
 // #define PRINT_INFO // whether to print some parameters
 
@@ -569,7 +575,98 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 }
 
 
-void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
+void save_layout_coord(const odgi::graph_t &graph, cuda::node_data_t &node_data, std::vector<std::atomic<double>> &graph_X, std::vector<std::atomic<double>> &graph_Y, uint32_t node_count, std::string &layout_file_name_iter) {
+    // copy coords back to X, Y vectors
+    for (int node_idx = 0; node_idx < node_count; node_idx++) {
+        cuda::node_t *n = &(node_data.nodes[node_idx]);
+        // coords[0], coords[1], coords[2], coords[3] are stored consecutively. 
+        float *coords = n->coords;
+        // check if coordinates valid (not NaN or infinite)
+        for (int i = 0; i < 4; i++) {
+            if (!isfinite(coords[i])) {
+                std::cout << "WARNING: invalid coordiate" << std::endl;
+            }
+        }
+        graph_X[node_idx * 2].store(double(coords[0]));
+        graph_Y[node_idx * 2].store(double(coords[1]));
+        graph_X[node_idx * 2 + 1].store(double(coords[2]));
+        graph_Y[node_idx * 2 + 1].store(double(coords[3]));
+        //std::cout << "coords of " << node_idx << ": [" << X[node_idx*2] << "; " << Y[node_idx*2] << "] ; [" << X[node_idx*2+1] << "; " << Y[node_idx*2+1] <<"]\n";
+    }
+
+    // copy from layout_main.cpp
+    std::vector<double> X_final(graph_X.size());
+    uint64_t i = 0;
+    for (auto& x : graph_X) {
+        X_final[i++] = x.load();
+    }
+    std::vector<double> Y_final(graph_Y.size());
+    i = 0;
+    for (auto& y : graph_Y) {
+        Y_final[i++] = y.load();
+    }
+
+    // refine order by weakly connected components
+    std::vector<std::vector<handlegraph::handle_t>> weak_components = odgi::algorithms::weakly_connected_component_vectors(&graph);
+
+    //uint64_t num_components_on_each_dimension = std::ceil(sqrt(weak_components.size()));
+    //std::cerr << " num_components_on_each_dimension " << num_components_on_each_dimension << std::endl;
+
+    double border = 1000.0;
+    double curr_y_offset = border;
+    std::vector<odgi::algorithms::coord_range_2d_t> component_ranges;
+    for (auto& component : weak_components) {
+        component_ranges.emplace_back();
+        auto& component_range = component_ranges.back();
+        for (auto& handle : component) {
+            uint64_t pos = 2 * odgi::number_bool_packing::unpack_number(handle);
+            for (uint64_t j = pos; j <= pos+1; ++j) {
+                component_range.include(X_final[j], Y_final[j]);
+            }
+        }
+        component_range.x_offset = component_range.min_x - border;
+        component_range.y_offset = curr_y_offset - component_range.min_y;
+        curr_y_offset += component_range.height() + border;
+    }
+
+    for (uint64_t num_component = 0; num_component < weak_components.size(); ++num_component) {
+        auto& component_range = component_ranges[num_component];
+
+        for (auto& handle :  weak_components[num_component]) {
+            uint64_t pos = 2 * odgi::number_bool_packing::unpack_number(handle);
+
+            for (uint64_t j = pos; j <= pos+1; ++j) {
+                X_final[j] -= component_range.x_offset;
+                Y_final[j] += component_range.y_offset;
+            }
+        }
+    }
+
+    odgi::algorithms::layout::Layout lay(X_final, Y_final);
+    ofstream f(layout_file_name_iter.c_str());
+    lay.serialize(f);
+    f.close();
+
+
+    // if (layout_out_file) {
+    //     auto& outfile = args::get(layout_out_file);
+    //     if (outfile.size()) {
+    //         odgi::algorithms::layout::Layout lay(X_final, Y_final);
+    //         if (outfile == "-") {
+    //             lay.serialize(std::cout);
+    //         } else {
+    //             ofstream f(outfile.c_str());
+    //             lay.serialize(f);
+    //             f.close();
+    //         }
+    //     }
+    // }        
+
+
+}
+
+
+void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y, std::string &layout_file_name) {
 
 #ifdef cuda_layout_profiling
     auto start = std::chrono::high_resolution_clock::now();
@@ -759,11 +856,18 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     cudaFree(rnd_state_tmp);
 
+    // save the initial coordinates
+    std::string layout_file_name_iter = layout_file_name + "_init";
+    save_layout_coord(graph, node_data, X, Y, node_count, layout_file_name_iter);
 
     for (int iter = 0; iter < config.iter_max; iter++) {
         cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
         cudaError_t error = cudaDeviceSynchronize();
         // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+
+        // save the current coordinates
+        std::string layout_file_name_iter = layout_file_name + "_" + std::to_string(iter);
+        save_layout_coord(graph, node_data, X, Y, node_count, layout_file_name_iter);
     }
 
 #else
