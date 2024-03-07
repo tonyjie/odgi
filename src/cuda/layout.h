@@ -51,7 +51,8 @@ struct path_data_t {
 };
 
 
-#define SM_COUNT 84
+// #define SM_COUNT 84
+// #define SM_COUNT 108
 #define BLOCK_SIZE 1024
 #define WARP_SIZE 32
 struct curandStateXORWOWCoalesced_t {
