@@ -193,7 +193,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
                                    cuda::node_data_t node_data, cuda::path_data_t path_data) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
-    assert(smid < 84);
+    assert(smid < SM_COUNT);
     curandStateCoalesced_t *thread_rnd_state = &rnd_state[smid];
 
     __shared__ bool cooling[BLOCK_SIZE / WARP_SIZE]; // This [32] is actually BLOCK_SIZE/WARP_SIZE = 1024/32 = 32. Not good to hardcode. 
