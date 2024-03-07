@@ -96,6 +96,10 @@ int main_layout(int argc, char **argv) {
     args::ValueFlag<double> g_step_decrease_factor(gpu_opts, "N",
                                           "The step decreasing factor (default: 1.0).",
                                           {"step-decrease"});
+    // 3. number of GPU
+    args::ValueFlag<int> g_num_gpu(gpu_opts, "N", 
+                                        "Number of GPU used (default: 1).", 
+                                        {"num-gpu"});
 
     args::Group processing_info_opts(parser, "[ Processsing Information ]");
     args::Flag progress(processing_info_opts, "progress", "Write the current progress to stderr.", {'P', "progress"});
@@ -275,6 +279,8 @@ int main_layout(int argc, char **argv) {
     // data-reuse parameters
     uint64_t gpu_data_reuse_factor = g_data_reuse_factor ? args::get(g_data_reuse_factor) : 1;
     double gpu_step_decrease_factor = g_step_decrease_factor ? args::get(g_step_decrease_factor) : 1.0;
+    // num-gpu parameters
+    int gpu_num_gpu = g_num_gpu ? args::get(g_num_gpu) : 1;
 
     std::vector<std::atomic<double>> graph_X(graph.get_node_count() * 2);  // Graph's X coordinates for node+ and node-
     std::vector<std::atomic<double>> graph_Y(graph.get_node_count() * 2);  // Graph's Y coordinates for node+ and node-
@@ -366,7 +372,8 @@ int main_layout(int argc, char **argv) {
             graph_X,
             graph_Y, 
             gpu_data_reuse_factor,
-            gpu_step_decrease_factor
+            gpu_step_decrease_factor, 
+            gpu_num_gpu
             );
     } else {
         algorithms::path_linear_sgd_layout(

@@ -588,19 +588,18 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 }
 
 
-void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
+void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y, int numGPU) {
 
-    ncclComm_t comms[4];
-    int nDev = 4;
-    int devs[4] = { 0, 1, 2, 3 };
-    // Initializing NCCL
-    NCCLCHECK(ncclCommInitAll(comms, nDev, devs));
+    // ncclComm_t comms[4];
+    // int nDev = 4;
+    // int devs[4] = { 0, 1, 2, 3 };
+    // // Initializing NCCL
+    // NCCLCHECK(ncclCommInitAll(comms, nDev, devs));
 
-    // Finalizing NCCL
-    for (int i = 0; i < nDev; ++i) {
-        ncclCommDestroy(comms[i]);
-    }
-
+    // // Finalizing NCCL
+    // for (int i = 0; i < nDev; ++i) {
+    //     ncclCommDestroy(comms[i]);
+    // }
 
 
 
@@ -786,23 +785,98 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #ifdef PRINT_INFO
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
 #endif
-    curandState_t *rnd_state_tmp;
-    curandStateCoalesced_t *rnd_state;
-    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));
-    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
-    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    cuda_device_init<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);
-    tmp_error = cudaDeviceSynchronize();
-    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    cudaFree(rnd_state_tmp);
 
 
-    for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
-        cudaError_t error = cudaDeviceSynchronize();
-        // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+    // use multiple GPUs to launch this kernel synchronously
+
+    std::cout << "Number of GPUs used: " << numGPU << std::endl;
+
+    // int nDev = 4;
+    
+    int *devs = new int[numGPU];
+    for (int i = 0; i < numGPU; i++) {
+        devs[i] = i;
     }
+    
+    cudaStream_t* s = (cudaStream_t*)malloc(numGPU * sizeof(cudaStream_t));
+
+    // Device-specific temporary buffers
+    curandState_t **rnd_state_tmp = (curandState_t **)malloc(numGPU * sizeof(curandState_t *));
+    curandStateCoalesced_t **rnd_state = (curandStateCoalesced_t **)malloc(numGPU * sizeof(curandStateCoalesced_t *));
+
+    // for each GPU device, it has its own random state
+    #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaStreamCreate(&s[i]));
+
+        std::cout << "Init random state for device " << i << "..." << std::endl;
+        CUDACHECK(cudaMallocManaged(&rnd_state_tmp[i], SM_COUNT * block_size * sizeof(curandState_t)));
+        CUDACHECK(cudaMallocManaged(&rnd_state[i], SM_COUNT * sizeof(curandStateCoalesced_t)));
+        cuda_device_init<<<SM_COUNT, block_size>>>(rnd_state_tmp[i], rnd_state[i]);
+    }
+
+    #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaDeviceSynchronize());
+        CUDACHECK(cudaFree(rnd_state_tmp[i]));
+        std::cout << "Random state for device " << i << " initialized." << std::endl;
+    }
+    free(rnd_state_tmp);
+    
+
+
+    // curandState_t *rnd_state_tmp;
+    // curandStateCoalesced_t *rnd_state;
+    // cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));
+
+    // for each GPU device, it has its own random state
+    
+
+    // tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
+
+    // cuda_device_init<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);
+    // tmp_error = cudaDeviceSynchronize();
+
+    // cudaFree(rnd_state_tmp);
+
+
+
+    // #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        // launch a kernel to print the current device id
+        for (int iter = 0; iter < config.iter_max; iter++) {
+            // cuda_device_layout<<<(block_nbr / numGPU), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[iter], zetas, node_data, path_data);
+            cuda_device_layout<<<(block_nbr), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[iter], zetas, node_data, path_data);
+            cudaError_t error = cudaDeviceSynchronize();
+            // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+        }
+
+    }
+
+    // Wait for all modifications to complete
+    #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; ++i) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaStreamSynchronize(s[i]));
+    }    
+
+    // Free
+    // #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; ++i) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaStreamDestroy(s[i]));
+    }
+    free(s);
+    delete[] devs;
+
+    // for (int iter = 0; iter < config.iter_max; iter++) {
+    //     cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
+    //     cudaError_t error = cudaDeviceSynchronize();
+    //     // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+    // }
 
 #else
     cpu_layout(config, etas, zetas, node_data, path_data);
@@ -840,6 +914,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaFree(path_data.element_array);
     cudaFree(zetas);
 #ifdef USE_GPU
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(i));
+        CUDACHECK(cudaFree(rnd_state[i]));
+    }
     cudaFree(rnd_state);
 #endif
 
