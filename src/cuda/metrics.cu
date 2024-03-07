@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <iostream>
 #include <cuda.h>
+#include "cuda_runtime_api.h"
 
 // #define LOG_STRESS
 // for geometric mean of each term's stress. 
@@ -752,6 +753,12 @@ void compute_all_path_stress(cuda::node_data_t node_data, cuda::path_data_t path
 void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout, int nthreads) {
     printf("CUDA kernel to compute sampled path stress\n");
 
+    // get cuda device property, and get the SM count
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    int sm_count = prop.multiProcessorCount;
+    std::cout << "SM count: " << sm_count << std::endl;
+
 #ifdef COUNT_TIME
     // start time
     auto start_preprocess = std::chrono::high_resolution_clock::now();
@@ -1082,15 +1089,15 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     // initialize random states
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
-    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));        
+    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));        
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     }
-    tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
+    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     }
-    cuda_device_init_metric<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);    
+    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);    
     tmp_error = cudaDeviceSynchronize();
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
@@ -1172,15 +1179,15 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
 
     std::cout << "Compute STDDEV......" << std::endl;
     // initialize random states
-    tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));        
+    tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));        
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     }
-    tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
+    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     }
-    cuda_device_init_metric<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);    
+    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);    
     tmp_error = cudaDeviceSynchronize();
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;

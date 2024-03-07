@@ -1,8 +1,26 @@
 #include "layout.h"
 #include <cuda.h>
 #include <assert.h>
-
+#include "cuda_runtime_api.h"
 // #define PRINT_INFO // whether to print some parameters
+
+#define CUDACHECK(cmd) do {                         \
+  cudaError_t err = cmd;                            \
+  if (err != cudaSuccess) {                         \
+    printf("Failed: Cuda error %s:%d '%s'\n",       \
+        __FILE__,__LINE__,cudaGetErrorString(err)); \
+    exit(EXIT_FAILURE);                             \
+  }                                                 \
+} while(0)
+
+#define NCCLCHECK(cmd) do {                         \
+  ncclResult_t res = cmd;                           \
+  if (res != ncclSuccess) {                         \
+    printf("Failed, NCCL error %s:%d '%s'\n",       \
+        __FILE__,__LINE__,ncclGetErrorString(res)); \
+    exit(EXIT_FAILURE);                             \
+  }                                                 \
+} while(0)
 
 namespace cuda {
 
@@ -171,10 +189,15 @@ void update_pos_gpu(int64_t &n1_pos_in_path, uint32_t &n1_id, int &n1_offset,
 }
 
 __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, 
-                                   cuda::node_data_t node_data, cuda::path_data_t path_data) {
+                                   cuda::node_data_t node_data, cuda::path_data_t path_data, int sm_count) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
-    assert(smid < 84);
+    // print 
+    // if (threadIdx.x == 0) {
+    //     printf("Thread %i, SM %i\n", tid, smid);
+    // }
+    assert(smid < sm_count);
+
     curandStateCoalesced_t *thread_rnd_state = &rnd_state[smid];
 
     __shared__ bool cooling[BLOCK_SIZE / WARP_SIZE]; // This [32] is actually BLOCK_SIZE/WARP_SIZE = 1024/32 = 32. Not good to hardcode. 
@@ -590,6 +613,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "===== GPU Data Reuse Parameters =====" << std::endl;
     std::cout << "gpu_data_reuse_factor: " << config.gpu_data_reuse_factor << "\t" << "gpu_step_decrease_factor: " << config.gpu_step_decrease_factor << std::endl;
 
+    // get cuda device property, and get the SM count
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    int sm_count = prop.multiProcessorCount;
+    std::cout << "SM count: " << sm_count << std::endl;
+
 
     // create eta array
     double *etas;
@@ -750,20 +779,23 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #endif
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
-    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));
-    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
-    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    cuda_device_init<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);
+    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));
+    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
+    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    cuda_device_init<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);
+    CUDACHECK(cudaGetLastError());
     tmp_error = cudaDeviceSynchronize();
-    // std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     cudaFree(rnd_state_tmp);
 
 
     for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
+        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
+        // check error
+        CUDACHECK(cudaGetLastError());
         cudaError_t error = cudaDeviceSynchronize();
-        // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+        std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
 
 #else
