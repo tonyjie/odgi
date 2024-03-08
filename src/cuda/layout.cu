@@ -857,8 +857,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     for (int iter = 0; iter < config.iter_max; iter++) {
         for (int i = 0; i < numGPU; i++) {
             CUDACHECK(cudaSetDevice(devs[i]));
-            // cuda_device_layout<<<(block_nbr / numGPU), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[iter], zetas, node_data, path_data, sm_count);
-            cuda_device_layout<<<(block_nbr), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[iter], zetas, node_data, path_data, sm_count);
+            cuda_device_layout<<<(block_nbr / numGPU), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[iter], zetas, node_data, path_data, sm_count);
+            // cuda_device_layout<<<(block_nbr), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[iter], zetas, node_data, path_data, sm_count);
             CUDACHECK(cudaGetLastError());
             // CUDACHECK(cudaDeviceSynchronize());
         }
