@@ -779,14 +779,11 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #endif
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
-    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    CUDACHECK(cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t)));
+    CUDACHECK(cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t)));
     cuda_device_init<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);
     CUDACHECK(cudaGetLastError());
-    tmp_error = cudaDeviceSynchronize();
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    CUDACHECK(cudaDeviceSynchronize());
     cudaFree(rnd_state_tmp);
 
 
@@ -794,8 +791,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
         // check error
         CUDACHECK(cudaGetLastError());
-        cudaError_t error = cudaDeviceSynchronize();
-        std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
+        CUDACHECK(cudaDeviceSynchronize());
     }
 
 #else
