@@ -752,6 +752,13 @@ void compute_all_path_stress(cuda::node_data_t node_data, cuda::path_data_t path
 void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout, int nthreads) {
     printf("CUDA kernel to compute sampled path stress\n");
 
+    // get cuda device property, and get the SM count
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    int sm_count = prop.multiProcessorCount;
+    std::cout << "SM count: " << sm_count << std::endl;
+
+
 #ifdef COUNT_TIME
     // start time
     auto start_preprocess = std::chrono::high_resolution_clock::now();
@@ -830,203 +837,9 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
             }
         }
     }
-
-
-#endif
-
-#ifdef DEBUG_DETAIL
-
-
-#ifdef DEBUG_CHR16
-    // print the length of path[0]
-    std::cout << "Path[0] length: " << graph.get_step_count(path_handles[0]) << std::endl;
-    // go through path[0], print out the node_id and its length
-    odgi::step_handle_t s = graph.path_begin(path_handles[0]);
-    bool begin_count = false;
-    int step_cnt_between = 0;
-    int nuc_length_between = 0;
-    for (int step_idx = 0; step_idx < graph.get_step_count(path_handles[0]); step_idx++) {
-        odgi::handle_t h = graph.get_handle_of_step(s);
-        // std::cout << "node[" << graph.get_id(h) - 1 << "], len: " << graph.get_length(h) << std::endl;
-
-        if (graph.get_id(h) - 1 == 2670508) {
-            std::cout << "node[2670508]: " << ", len: " << graph.get_length(h) << ", is_reverse: " << graph.get_is_reverse(h) << std::endl;
-            begin_count = false;
-        }
-
-        if (begin_count) {
-            step_cnt_between++;
-            nuc_length_between += graph.get_length(h);
-            std::cout << "node[" << graph.get_id(h) - 1 << "], len: " << graph.get_length(h) << ", is_reverse: " << graph.get_is_reverse(h) << std::endl;
-        }
-
-        // when first see node[2670508], start to count the number of steps, until see node[2670505]
-        if (graph.get_id(h) - 1 == 2670505) {
-            std::cout << "node[2670505]: " << ", len: " << graph.get_length(h) << ", is_reverse: " << graph.get_is_reverse(h) << std::endl;
-            begin_count = true;
-        }
-
-        // get next step
-        if (graph.has_next_step(s)) {
-            s = graph.get_next_step(s);
-        }
-    }
-
-    std::cout << "step_cnt_between: " << step_cnt_between << ", nuc_length_between: " << nuc_length_between << std::endl;
-
-
-    // Path[436]
-    // print its step and its length, and its reverse
-    std::cout << "Path[436] length: " << graph.get_step_count(path_handles[436]) << std::endl;
-    // go through path[0], print out the node_id and its length
-    s = graph.path_begin(path_handles[436]);
-    for (int step_idx = 0; step_idx < graph.get_step_count(path_handles[436]); step_idx++) {
-        odgi::handle_t h = graph.get_handle_of_step(s);
-        std::cout << "node[" << graph.get_id(h) - 1 << "], len: " << graph.get_length(h) << ", is_reverse: " << graph.get_is_reverse(h) << std::endl;
-        // get next step
-        if (graph.has_next_step(s)) {
-            s = graph.get_next_step(s);
-        }
-    }
-
-
-    // check from path[0], the layout distance of these node-pairs
-
-    std::cout << "Path[0] critical area..." << std::endl;
-    int node_0 = 2670505;
-    int node_1 = 2670506;
-    int node_2 = 2670508;
-
-    auto node_0_start = layout.coords(graph.get_handle(node_0 + 1, false)); // the left end of this node
-    auto node_0_end = layout.coords(graph.get_handle(node_0 + 1, true)); // the right end of this node
-    auto node_1_start = layout.coords(graph.get_handle(node_1 + 1, false)); // the left end of this node
-    auto node_1_end = layout.coords(graph.get_handle(node_1 + 1, true)); // the right end of this node
-    auto node_2_start = layout.coords(graph.get_handle(node_2 + 1, false)); // the left end of this node
-    auto node_2_end = layout.coords(graph.get_handle(node_2 + 1, true)); // the right end of this node
-
-    double node_0_within_dist = odgi::algorithms::layout::coord_dist(node_0_start, node_0_end);
-    double node_0_node_1_dist = odgi::algorithms::layout::coord_dist(node_0_end, node_1_start);
-    double node_1_within_dist = odgi::algorithms::layout::coord_dist(node_1_start, node_1_end);
-    double node_1_node_2_dist = odgi::algorithms::layout::coord_dist(node_1_end, node_2_start);
-    double node_2_within_dist = odgi::algorithms::layout::coord_dist(node_2_start, node_2_end);
-
-    // print out the layout distance
-    std::cout << "node_0_within_dist: " << node_0_within_dist << std::endl;
-    std::cout << "node_0_node_1_dist: " << node_0_node_1_dist << std::endl;
-    std::cout << "node_1_within_dist: " << node_1_within_dist << std::endl;
-    std::cout << "node_1_node_2_dist: " << node_1_node_2_dist << std::endl;
-    std::cout << "node_2_within_dist: " << node_2_within_dist << std::endl;
-
-    // check from path[436], the layout distance of these node-pairs
-    std::cout << "Path[436] critical area..." << std::endl;
-    int node_3 = 2670507;
-
-    // for path[436] which is all reversed
-    auto node_2_start_436 = node_2_end;
-    auto node_2_end_436 = node_2_start;
-    auto node_3_start_436 = layout.coords(graph.get_handle(node_3 + 1, true)); // the right end of this node
-    auto node_3_end_436 = layout.coords(graph.get_handle(node_3 + 1, false)); // the left end of this node
-    auto node_0_start_436 = node_0_end;
-    auto node_0_end_436 = node_0_start;
-
-    double node_2_node_3_dist = odgi::algorithms::layout::coord_dist(node_2_end_436, node_3_start_436);
-    double node_3_within_dist = odgi::algorithms::layout::coord_dist(node_3_start_436, node_3_end_436);
-    double node_3_node_0_dist = odgi::algorithms::layout::coord_dist(node_3_end_436, node_0_start_436);
-
-    // print out the layout distance
-    std::cout << "node_2_within_dist: " << node_2_within_dist << std::endl;
-    std::cout << "node_2_node_3_dist: " << node_2_node_3_dist << std::endl;
-    std::cout << "node_3_within_dist: " << node_3_within_dist << std::endl;
-    std::cout << "node_3_node_0_dist: " << node_3_node_0_dist << std::endl;
-    std::cout << "node_0_within_dist: " << node_0_within_dist << std::endl;
 #endif
 
 
-    // For the path with 3 steps
-    // int node_id = 2670508;
-    // // I want to check for node[1], how many paths it is in
-    // for (int path_idx = 0; path_idx < path_count; path_idx++) {
-    //     odgi::path_handle_t p = path_handles[path_idx];
-    //     graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
-    //         odgi::handle_t h = graph.get_handle_of_step(s);
-    //         if (graph.get_id(h) - 1 == node_id) {
-    //             std::cout << "path[" << path_idx << "]: " << " has node[" << node_id << "]" << std::endl;
-    //         }
-    //     });
-    // }
-
-    // // check another node_id
-    // node_id = 2670507;
-    // for (int path_idx = 0; path_idx < path_count; path_idx++) {
-    //     odgi::path_handle_t p = path_handles[path_idx];
-    //     graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
-    //         odgi::handle_t h = graph.get_handle_of_step(s);
-    //         if (graph.get_id(h) - 1 == node_id) {
-    //             std::cout << "path[" << path_idx << "]: " << " has node[" << node_id << "]" << std::endl;
-    //         }
-    //     });
-    // }
-    // // check another node_id
-    // node_id = 2670505;
-    // for (int path_idx = 0; path_idx < path_count; path_idx++) {
-    //     odgi::path_handle_t p = path_handles[path_idx];
-    //     graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
-    //         odgi::handle_t h = graph.get_handle_of_step(s);
-    //         if (graph.get_id(h) - 1 == node_id) {
-    //             std::cout << "path[" << path_idx << "]: " << " has node[" << node_id << "]" << std::endl;
-    //         }
-    //     });
-    // }
-
-
-    // For the path with 4 steps
-
-    // node_id = 1964057;
-    // for (int path_idx = 0; path_idx < path_count; path_idx++) {
-    //     odgi::path_handle_t p = path_handles[path_idx];
-    //     graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
-    //         odgi::handle_t h = graph.get_handle_of_step(s);
-    //         if (graph.get_id(h) - 1 == node_id) {
-    //             std::cout << "path[" << path_idx << "]: " << " has node[" << node_id << "]" << std::endl;
-    //         }
-    //     });
-    // }
-
-    // node_id = 1964055;
-    // for (int path_idx = 0; path_idx < path_count; path_idx++) {
-    //     odgi::path_handle_t p = path_handles[path_idx];
-    //     graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
-    //         odgi::handle_t h = graph.get_handle_of_step(s);
-    //         if (graph.get_id(h) - 1 == node_id) {
-    //             std::cout << "path[" << path_idx << "]: " << " has node[" << node_id << "]" << std::endl;
-    //         }
-    //     });
-    // }
-
-    // node_id = 1964054; 
-    // for (int path_idx = 0; path_idx < path_count; path_idx++) {
-    //     odgi::path_handle_t p = path_handles[path_idx];
-    //     graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
-    //         odgi::handle_t h = graph.get_handle_of_step(s);
-    //         if (graph.get_id(h) - 1 == node_id) {
-    //             std::cout << "path[" << path_idx << "]: " << " has node[" << node_id << "]" << std::endl;
-    //         }
-    //     });
-    // }
-
-    // node_id = 1964052; 
-    // for (int path_idx = 0; path_idx < path_count; path_idx++) {
-    //     odgi::path_handle_t p = path_handles[path_idx];
-    //     graph.for_each_step_in_path(p, [&](const odgi::step_handle_t &s) {
-    //         odgi::handle_t h = graph.get_handle_of_step(s);
-    //         if (graph.get_id(h) - 1 == node_id) {
-    //             std::cout << "path[" << path_idx << "]: " << " has node[" << node_id << "]" << std::endl;
-    //         }
-    //     });
-    // }
-
-    // exit(0);
-#endif
 
 
 
@@ -1082,15 +895,15 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     // initialize random states
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
-    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));        
+    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));        
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     }
-    tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
+    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     }
-    cuda_device_init_metric<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);    
+    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);    
     tmp_error = cudaDeviceSynchronize();
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
@@ -1172,15 +985,15 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
 
     std::cout << "Compute STDDEV......" << std::endl;
     // initialize random states
-    tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));        
+    tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));        
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     }
-    tmp_error = cudaMallocManaged(&rnd_state, SM_COUNT * sizeof(curandStateCoalesced_t));
+    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
     }
-    cuda_device_init_metric<<<SM_COUNT, block_size>>>(rnd_state_tmp, rnd_state);    
+    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);    
     tmp_error = cudaDeviceSynchronize();
     if (tmp_error != cudaSuccess) {
         std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;

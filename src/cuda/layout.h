@@ -53,7 +53,7 @@ struct path_data_t {
 // RTX A6000
 // #define SM_COUNT 84
 // RTX A100
-#define SM_COUNT 108
+// #define SM_COUNT 108
 #define BLOCK_SIZE 1024
 #define WARP_SIZE 32
 struct curandStateXORWOWCoalesced_t {
