@@ -11,10 +11,32 @@
 // #define COUNT_TIME
 // #define DEBUG
 // #define DEBUG_CHR16
+#define DEBUG_BLOCK
+
+#define CUDACHECK(cmd) do {                         \
+  cudaError_t err = cmd;                            \
+  if (err != cudaSuccess) {                         \
+    printf("Failed: Cuda error %s:%d '%s'\n",       \
+        __FILE__,__LINE__,cudaGetErrorString(err)); \
+    exit(EXIT_FAILURE);                             \
+  }                                                 \
+} while(0)
+
+#define NCCLCHECK(cmd) do {                         \
+  ncclResult_t res = cmd;                           \
+  if (res != ncclSuccess) {                         \
+    printf("Failed, NCCL error %s:%d '%s'\n",       \
+        __FILE__,__LINE__,ncclGetErrorString(res)); \
+    exit(EXIT_FAILURE);                             \
+  }                                                 \
+} while(0)
+
+
+#define DISTRIBUTION
 
 #define PRINT_INFO
 
-#define STDDEV
+// #define STDDEV
 
 namespace cuda {
 
@@ -231,6 +253,212 @@ static __device__ __inline__ uint32_t __mysmid(){
     asm volatile("mov.u32 %0, %%smid;" : "=r"(smid));
     return smid;
 }
+
+#ifdef DISTRIBUTION
+/*
+* CUDA kernel to compute the sampled path stress and count the distribution as well
+*/
+__global__
+void compute_sampled_path_stress_distribution(cuda::node_data_t node_data, cuda::path_data_t path_data, uint64_t total_term_count, curandStateCoalesced_t *rnd_state, double *blockSums, int *ignr_sums, unsigned long long int *hist_stress) {
+    uint64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    double stress = 0; // each threaed counts the stress of a node-pair
+    int ignr_count = 0; // count the number of node-pairs that are directly connected
+
+    if (tid < total_term_count) { // if the thread is doing something
+
+        uint32_t smid = __mysmid();
+        assert(smid < 84);
+        curandStateCoalesced_t *thread_rnd_state = &rnd_state[smid];
+
+        // select path
+        uint32_t step_idx = cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % path_data.total_path_steps;
+        uint32_t path_idx = path_data.element_array[step_idx].pidx;
+
+        path_t p = path_data.paths[path_idx];
+
+        uint32_t s1_idx, s2_idx, n1_id, n2_id;
+        int n1_offset, n2_offset;
+        double term_dist, layout_dist; // ground-truth and layout distance of a node-pair
+
+        if (p.step_count == 1) { // single-node path
+            // TODO: count this specific node's stress
+            n1_id = p.elements[0].node_id;
+            n2_id = n1_id;
+            uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length; 
+            term_dist = n1_seq_length; // ground-truth distance
+            n1_offset = 0; 
+            n2_offset = 2;
+        } // end of single-node path 
+        else { // normal scenario
+
+            s1_idx = cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % p.step_count;
+            assert(s1_idx < p.step_count);
+            do {
+                s2_idx = cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % p.step_count;
+            } while (s2_idx == s1_idx);
+            
+            assert(s1_idx < p.step_count);
+            assert(s2_idx < p.step_count);
+            assert(s1_idx != s2_idx);
+
+            n1_id = p.elements[s1_idx].node_id;
+            int64_t n1_pos_in_path = p.elements[s1_idx].pos;
+            bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
+            n1_pos_in_path = std::abs(n1_pos_in_path);
+
+            n2_id = p.elements[s2_idx].node_id;
+            int64_t n2_pos_in_path = p.elements[s2_idx].pos;
+            bool n2_is_rev = (n2_pos_in_path < 0)? true: false;
+            n2_pos_in_path = std::abs(n2_pos_in_path);    
+            
+            uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
+            bool n1_use_other_end = (cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % 2 == 0) ? true: false;
+            if (n1_use_other_end) {
+                n1_pos_in_path += uint64_t(n1_seq_length);
+                n1_use_other_end = !n1_is_rev;
+            } else {
+                n1_use_other_end = n1_is_rev;
+            }
+
+            uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
+            bool n2_use_other_end =(cuda_coalesced_metric(thread_rnd_state, threadIdx.x) % 2 == 0) ? true: false;
+            if (n2_use_other_end) {
+                n2_pos_in_path += uint64_t(n2_seq_length);
+                n2_use_other_end = !n2_is_rev;
+            } else {
+                n2_use_other_end = n2_is_rev;
+            }    
+
+            term_dist = std::abs(n1_pos_in_path - n2_pos_in_path); // ground-truth distance of a node-pair
+            // if (term_dist < 1e-9) { // we want to skip these connected nodes, since their ground-truth distance is 0, which leads to too large stress for a single term
+            //     term_dist = 100;
+            // }
+            
+            n1_offset = n1_use_other_end ? 2: 0;
+            n2_offset = n2_use_other_end ? 2: 0;
+
+            // if (threadIdx.x == 0) {
+            //     // printf("tid: %d, term_dist: %f\n", tid, term_dist);
+            // }
+
+        } // end of normal scenario
+
+        if (term_dist < 1e-9) { // we want to skip these connected nodes, since their ground-truth distance is 0, which leads to too large stress for a single term
+            stress = 0;
+            ignr_count++;
+        } else { // normal case: node-pair not directly connected
+
+            float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
+            float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
+            float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
+            float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
+            double x1_val = double(*x1);
+            double x2_val = double(*x2);
+            double y1_val = double(*y1);
+            double y2_val = double(*y2);    
+
+            layout_dist = std::sqrt(std::pow(x1_val - x2_val, 2) + std::pow(y1_val - y2_val, 2)); // layout distance of a node-pair
+            // compute the stress
+            stress = std::pow( ((layout_dist - term_dist) / term_dist), 2);
+            // reversed version of stress
+            // if (layout_dist < 1e-4) {
+            //     layout_dist = 1e-4;
+            // }
+            // stress = std::pow( ((layout_dist - term_dist) / layout_dist), 2);
+            // stress = std::pow( ((layout_dist - term_dist) / (layout_dist + term_dist)), 2); // symmetric stress
+        }
+
+#ifdef DEBUG
+    // if stress is very large, print out the node-pair
+    if (stress > 1e8) {
+    // if (term_dist == 1) {
+        // get the current path
+        printf("path_idx: %d, path_step_count: %d\n", path_idx, p.step_count);
+
+        printf("tid: %ld, stress: %f, term_dist: %f, layout_dist: %f, n1_id: %d, n2_id: %d, n1_offset: %d, n2_offset: %d\n", tid, stress, term_dist, layout_dist, n1_id, n2_id, n1_offset, n2_offset);
+    }
+#endif
+
+    // check where the stress falls into the hist_stress
+    // region: 0-0.1, 0.1-1, 1-10, 10-100, 1e2-1e3, 1e3-1e4, 1e4-1e5, 1e5-1e6, 1e6-1e7, 1e7-1e8, 1e8-1e9, >1e9
+    if (stress < 0.1) {
+        atomicAdd(&hist_stress[0], 1);
+    } else if (stress < 1) {
+        atomicAdd(&hist_stress[1], 1);
+    } else if (stress < 10) {
+        atomicAdd(&hist_stress[2], 1);
+    } else if (stress < 100) {
+        atomicAdd(&hist_stress[3], 1);
+    } else if (stress < 1e3) {
+        atomicAdd(&hist_stress[4], 1);
+    } else if (stress < 1e4) {
+        atomicAdd(&hist_stress[5], 1);
+    } else if (stress < 1e5) {
+        atomicAdd(&hist_stress[6], 1);
+    } else if (stress < 1e6) {
+        atomicAdd(&hist_stress[7], 1);
+    } else if (stress < 1e7) {
+        atomicAdd(&hist_stress[8], 1);
+    } else if (stress < 1e8) {
+        atomicAdd(&hist_stress[9], 1);
+    } else if (stress < 1e9) {
+        atomicAdd(&hist_stress[10], 1);
+    } else {
+        atomicAdd(&hist_stress[11], 1);
+    }
+
+
+    } // end of if the thread is doing something
+
+
+    // now each thread has a stress value, we need to sum up the stress of all node-pairs
+    // NEXT: Then we need to sum up the stress of all node-pairs
+    extern __shared__ double sharedStress[];
+
+#ifdef LOG_STRESS
+    // now we count geometric mean. so need to take log. Have to take log(1+stress) to avoid log(0) -> -inf
+    sharedStress[threadIdx.x] = log(stress + 1);
+#else
+    sharedStress[threadIdx.x] = stress;
+#endif
+    // DEBUG: print it out
+    // if (threadIdx.x == 0) {
+    //     printf("tid: %d, log(stress+1): %f\n", tid, log(stress+1));
+    // }
+
+    __syncthreads();
+
+
+
+    // Reduction
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            sharedStress[threadIdx.x] += sharedStress[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    // Store the partial sum
+    if (threadIdx.x == 0) {
+        blockSums[blockIdx.x] = sharedStress[0];
+    }
+
+    // sum up the number of node-pairs that are directly connected
+    extern __shared__ int sharedIgnrCount[];
+    sharedIgnrCount[threadIdx.x] = ignr_count;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            sharedIgnrCount[threadIdx.x] += sharedIgnrCount[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        ignr_sums[blockIdx.x] = sharedIgnrCount[0];
+    }
+
+}
+
+#endif
 
 #ifdef STDDEV
 /*
@@ -1089,19 +1317,11 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     // initialize random states
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
-    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));        
-    if (tmp_error != cudaSuccess) {
-        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    }
-    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
-    if (tmp_error != cudaSuccess) {
-        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    }
-    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);    
-    tmp_error = cudaDeviceSynchronize();
-    if (tmp_error != cudaSuccess) {
-        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    }
+    CUDACHECK(cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t)));
+    CUDACHECK(cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t)));
+    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);
+    CUDACHECK(cudaGetLastError());  
+    CUDACHECK(cudaDeviceSynchronize());
     cudaFree(rnd_state_tmp);
 
 #ifdef COUNT_TIME
@@ -1121,17 +1341,48 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     int *ignrSums;
     cudaMallocManaged(&ignrSums, block_nbr * sizeof(int));
 
+#ifdef DISTRIBUTION
+    // create a histogram for each stress term. Within the kernel, we will compute the stress of each term, and send it into the correct bin of histogram
+    // region: 0-0.1, 0.1-1, 1-10, 10-100, 1e2-1e3, 1e3-1e4, 1e4-1e5, 1e5-1e6, 1e6-1e7, 1e7-1e8, 1e8-1e9, >1e9
+    // std::vector<int> hist_stress(12, 0);
+    // this historgram should be sent into the kernel, so that each thread can update the histogram
+    
+    unsigned long long int *hist_stress;
+    CUDACHECK(cudaMallocManaged(&hist_stress, 12 * sizeof(unsigned long long int)));
+    for (int i = 0; i < 12; i++) {
+        hist_stress[i] = 0;
+    }
+
+#endif
 
     int sharedMemSize = block_size * sizeof(double);
+
+#ifdef DISTRIBUTION
+    compute_sampled_path_stress_distribution<<<block_nbr, block_size, sharedMemSize>>>(node_data, path_data, total_term_count, rnd_state, blockSums, ignrSums, hist_stress);
+    CUDACHECK(cudaGetLastError());
+    CUDACHECK(cudaDeviceSynchronize());
+
+    // print out the hist_stress
+    std::cout << "===== [Distribution] Histogram for stress =====" << std::endl;
+    for (int i = 0; i < 12; i++) {
+        if (i == 0) {
+            std::cout << "0-0.1: " << hist_stress[i] << std::endl;
+        }
+        else if (i == 11) {
+            std::cout << ">1e9: " << hist_stress[i] << std::endl;
+        } else {
+            std::cout << pow(10, i - 2) << "-" << pow(10, i - 1) << ": " << hist_stress[i] << std::endl;
+        }
+    }
+    // free
+    cudaFree(hist_stress);
+#else
     // compute the sampled path stress
     compute_sampled_path_stress<<<block_nbr, block_size, sharedMemSize>>>(node_data, path_data, total_term_count, rnd_state, blockSums, ignrSums);
+    CUDACHECK(cudaGetLastError());
     // check for errors
-    cudaDeviceSynchronize();
-    // check errors
-    cudaError_t error = cudaGetLastError();
-    if (error != cudaSuccess) {
-        std::cerr << "CUDA error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
-    }
+    CUDACHECK(cudaDeviceSynchronize());
+#endif
 
 #ifdef COUNT_TIME
     // end time of kernel
@@ -1140,6 +1391,57 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     // std::cout << "Kernel time: " << (float)duration_kernel_ms / 1000 << " s" << std::endl;
     std::cout << "Kernel time: " << duration_kernel << " s" << std::endl;
 #endif
+
+#ifdef DISTRIBUTION
+    // create a histogram for the blockSums
+    // Average stress
+    // region: 0-10, 10-20, 20-30, 30-40, 40-50, 50-60, 60-70, 70-80, 80-90, 90-N
+    // std::vector<int> hist(10, 0);
+    // for (int i = 0; i < block_nbr; i++) {
+    //     int idx = int(blockSums[i] / 10 / BLOCK_SIZE);
+    //     if (idx >= 10) {
+    //         idx = 9;
+    //     }
+    //     hist[idx]++;
+    // }
+
+    // print out the histogram
+    // std::cout << "===== [Distribution] Histogram for blockSums =====" << std::endl;
+    // for (int i = 0; i < 10; i++) {
+    //     std::cout << i * 10 << "-" << (i + 1) * 10 << ": " << hist[i] << std::endl;
+    // }
+    // std::cout << std::endl;
+
+    // region: 0-1; 1-10; 10-100; 100-1000; 1000-10000; 10000+
+    std::vector<int> hist(6, 0);
+    for (int i = 0; i < block_nbr; i++) {
+        int idx = int(blockSums[i] / BLOCK_SIZE);
+        if (idx < 1) {
+            hist[0]++;
+        } else if (idx < 10) {
+            hist[1]++;
+        } else if (idx < 100) {
+            hist[2]++;
+        } else if (idx < 1000) {
+            hist[3]++;
+        } else if (idx < 10000) {
+            hist[4]++;
+        } else {
+            hist[5]++;
+        }
+    }
+    // print out the histogram
+    std::cout << "===== [Distribution] Histogram for blockSums =====" << std::endl;
+    std::cout << "0-1: " << hist[0] << std::endl;
+    std::cout << "1-10: " << hist[1] << std::endl;
+    std::cout << "10-100: " << hist[2] << std::endl;
+    std::cout << "100-1000: " << hist[3] << std::endl;
+    std::cout << "1000-10000: " << hist[4] << std::endl;
+    std::cout << "10000+: " << hist[5] << std::endl;
+
+
+#endif
+
 
     // Sum the block sums
     double total_path_stress = 0;
@@ -1152,7 +1454,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
         
         // if blockSums are very large, print out the blockSums
         if (blockSums[i] > block_size * 1000) {
-            std::cout << "block " << i << " has " << blockSums[i] << " stress" << std::endl;
+            std::cout << "block " << i << " has average of " << blockSums[i] / BLOCK_SIZE << " stress" << std::endl;
         }
 #endif
     }
@@ -1179,30 +1481,18 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
 
     std::cout << "Compute STDDEV......" << std::endl;
     // initialize random states
-    tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));        
-    if (tmp_error != cudaSuccess) {
-        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    }
-    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
-    if (tmp_error != cudaSuccess) {
-        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    }
-    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);    
-    tmp_error = cudaDeviceSynchronize();
-    if (tmp_error != cudaSuccess) {
-        std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    }
+    CUDACHECK(cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t)));
+    CUDACHECK(cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t)));
+    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state); 
+    CUDACHECK(cudaGetLastError());   
+    CUDACHECK(cudaDeviceSynchronize());
     cudaFree(rnd_state_tmp);
 
     // change to compute STDDEV
     compute_sampled_stress_stddev<<<block_nbr, block_size, sharedMemSize>>>(node_data, path_data, total_term_count, rnd_state, blockSums, ignrSums, mean_stress);
+    CUDACHECK(cudaGetLastError());
     // check for errors
-    cudaDeviceSynchronize();
-    // check errors
-    error = cudaGetLastError();
-    if (error != cudaSuccess) {
-        std::cerr << "CUDA error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
-    }
+    CUDACHECK(cudaDeviceSynchronize());
 
     // Sum the block sums
     double total_std_dev = 0;
