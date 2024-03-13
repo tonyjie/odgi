@@ -610,13 +610,14 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto start = std::chrono::high_resolution_clock::now();
 #endif
 
-
+#ifdef PRINT_INFO
     std::cout << "Hello world from CUDA host" << std::endl;
     std::cout << "iter_max: " << config.iter_max << std::endl;
     std::cout << "first_cooling_iteration: " << config.first_cooling_iteration << std::endl;
     std::cout << "min_term_updates: " << config.min_term_updates << std::endl;
     std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
     std::cout << "theta: " << config.theta << std::endl;
+#endif
 
     // get cuda device property, and get the SM count
     cudaDeviceProp prop;
@@ -741,11 +742,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto start_zeta = std::chrono::high_resolution_clock::now();
     double *zetas;
     uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
+#ifdef PRINT_INFO    
     std::cout << "zetas_cnt: " << zetas_cnt << std::endl;
     std::cout << "space_max: " << config.space_max << std::endl;
     std::cout << "config.space: " << config.space << std::endl;
     std::cout << "config.space_quantization: " << config.space_quantization_step << std::endl;
-
+#endif
     cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
     double zeta_tmp = 0.0;
     for (uint64_t i = 1; i < config.space + 1; i++) {
@@ -773,13 +775,11 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
-    cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
-    tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    CUDACHECK(cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t)));
+    CUDACHECK(cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t)));
     cuda_device_init<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);
-    tmp_error = cudaDeviceSynchronize();
-    std::cout << "rnd state CUDA Error: " << cudaGetErrorName(tmp_error) << ": " << cudaGetErrorString(tmp_error) << std::endl;
+    CUDACHECK(cudaGetLastError());
+    CUDACHECK(cudaDeviceSynchronize());
     cudaFree(rnd_state_tmp);
 
 #ifdef METRIC
@@ -793,12 +793,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     for (int iter = 0; iter < config.iter_max; iter++) {
         cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
-        cudaError_t error = cudaDeviceSynchronize();
-        if (error != cudaSuccess) {
-            std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
-        } else {
-            // std::cout << "Iteration[" << iter << "] ";
-        }
+        CUDACHECK(cudaGetLastError());
+        CUDACHECK(cudaDeviceSynchronize());
         
         // add a metric computing function here to print out the metric interactively during the layout process
 #ifdef METRIC        
