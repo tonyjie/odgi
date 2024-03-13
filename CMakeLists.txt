@@ -804,9 +804,19 @@ set(odgi_HEADERS
 
 target_include_directories(odgi_objs PUBLIC ${odgi_INCLUDES})
 # arch and gencode are configured for our GPU (RTX A6000)
-target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp -arch=sm_86 -gencode=arch=compute_86,code=sm_86>)
-# arch and gencode are configured for GPU on zhang-x3 (RTX 2080 Ti)
-# target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp -arch=sm_75 -gencode=arch=compute_75,code=sm_75>)
+# target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp -arch=sm_86 -gencode=arch=compute_86,code=sm_86>)
+# Autodetech the arch and gencode (work for both RTX A6000 and A100)
+include(FindCUDA/select_compute_arch)
+CUDA_DETECT_INSTALLED_GPUS(INSTALLED_GPU_CCS_1)
+string(STRIP "${INSTALLED_GPU_CCS_1}" INSTALLED_GPU_CCS_2)
+string(REPLACE " " ";" INSTALLED_GPU_CCS_3 "${INSTALLED_GPU_CCS_2}")
+string(REPLACE "." "" CUDA_ARCH_LIST "${INSTALLED_GPU_CCS_3}")
+SET(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCH_LIST})
+message(STATUS "CUDA_ARCH_LIST: ${CUDA_ARCH_LIST}")
+
+# Apply compile options. Detects different GPU compute capability. 
+target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp>)
+
 
 add_library(libodgi_static STATIC $<TARGET_OBJECTS:odgi_objs>)
 set_target_properties(libodgi_static PROPERTIES OUTPUT_NAME "odgi")
