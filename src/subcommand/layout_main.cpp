@@ -100,6 +100,10 @@ int main_layout(int argc, char **argv) {
     args::ValueFlag<int> g_num_gpu(gpu_opts, "N", 
                                         "Number of GPU used (default: 1).", 
                                         {"num-gpu"});
+    // 4. sync-freq
+    args::ValueFlag<int> g_sync_freq(gpu_opts, "N", 
+                                        "The frequency of synchronizing the data between CPU and GPU (default: 1).", 
+                                        {"sync-freq"});
 
     args::Group processing_info_opts(parser, "[ Processsing Information ]");
     args::Flag progress(processing_info_opts, "progress", "Write the current progress to stderr.", {'P', "progress"});
@@ -281,6 +285,8 @@ int main_layout(int argc, char **argv) {
     double gpu_step_decrease_factor = g_step_decrease_factor ? args::get(g_step_decrease_factor) : 1.0;
     // num-gpu parameters
     int gpu_num_gpu = g_num_gpu ? args::get(g_num_gpu) : 1;
+    // sync-freq parameters
+    int sync_freq = g_sync_freq ? args::get(g_sync_freq) : 1;
 
     std::vector<std::atomic<double>> graph_X(graph.get_node_count() * 2);  // Graph's X coordinates for node+ and node-
     std::vector<std::atomic<double>> graph_Y(graph.get_node_count() * 2);  // Graph's Y coordinates for node+ and node-
@@ -373,7 +379,8 @@ int main_layout(int argc, char **argv) {
             graph_Y, 
             gpu_data_reuse_factor,
             gpu_step_decrease_factor, 
-            gpu_num_gpu
+            gpu_num_gpu,
+            sync_freq
             );
     } else {
         algorithms::path_linear_sgd_layout(

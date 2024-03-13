@@ -23,7 +23,8 @@ namespace cuda {
 
 struct __align__(8) node_t {
     float coords[4];
-    int32_t seq_length;
+    // int32_t seq_length;
+    float seq_length;
 };
 struct node_data_t {
     uint32_t node_count;
@@ -84,6 +85,6 @@ struct layout_config_t {
 };
 
 
-void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y, int numGPU);
+void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y, int numGPU, int sync_freq);
 
 }

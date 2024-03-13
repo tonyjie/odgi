@@ -71,7 +71,8 @@ namespace odgi {
                                     std::vector<std::atomic<double>> &Y, 
                                     uint64_t &gpu_data_reuse_factor,
                                     double &gpu_step_decrease_factor, 
-                                    int numGPU);
+                                    int numGPU, 
+                                    int sync_freq);
 
 /// our learning schedule
         std::vector<double> path_linear_sgd_layout_schedule(const double &w_min,

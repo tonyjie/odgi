@@ -454,7 +454,8 @@ namespace odgi {
                                     std::vector<std::atomic<double>> &Y,
                                     uint64_t &gpu_data_reuse_factor,
                                     double &gpu_step_decrease_factor, 
-                                    int numGPU) {
+                                    int numGPU, 
+                                    int sync_freq) {
 
             cuda::layout_config_t config;
             config.iter_max = iter_max;
@@ -471,7 +472,7 @@ namespace odgi {
             config.gpu_data_reuse_factor = gpu_data_reuse_factor;
             config.gpu_step_decrease_factor = gpu_step_decrease_factor;
 
-            cuda::cuda_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y, numGPU);
+            cuda::cuda_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y, numGPU, sync_freq);
             return;
         }
 

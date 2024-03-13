@@ -26,10 +26,10 @@
 
 namespace cuda {
 
-__global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoalesced_t *rnd_state) {
+__global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoalesced_t *rnd_state, int device_id) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     // initialize curandState with original curand implementation
-    curand_init(42+tid, tid, 0, &rnd_state_tmp[tid]);
+    curand_init(42*device_id + tid, tid, 0, &rnd_state_tmp[tid]);
     // copy to coalesced data structure
     rnd_state[blockIdx.x].d[threadIdx.x] = rnd_state_tmp[tid].d;
     rnd_state[blockIdx.x].w0[threadIdx.x] = rnd_state_tmp[tid].v[0];
@@ -589,18 +589,9 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 }
 
 
-void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y, int numGPU) {
+void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y, int numGPU, int sync_freq) {
 
-    // ncclComm_t comms[4];
-    // int nDev = 4;
-    // int devs[4] = { 0, 1, 2, 3 };
-    // // Initializing NCCL
-    // NCCLCHECK(ncclCommInitAll(comms, nDev, devs));
 
-    // // Finalizing NCCL
-    // for (int i = 0; i < nDev; ++i) {
-    //     ncclCommDestroy(comms[i]);
-    // }
 
 
 
@@ -611,6 +602,188 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "SM count: " << sm_count << std::endl;
 
 
+    // use multiple GPUs to launch this kernel synchronously
+    std::cout << "Number of GPUs used: " << numGPU << std::endl;
+
+    int *devs = new int[numGPU];
+    for (int i = 0; i < numGPU; i++) {
+        devs[i] = i;
+    }
+
+    cudaStream_t* s = (cudaStream_t*)malloc(numGPU * sizeof(cudaStream_t));
+
+    // Initialize NCCL
+    ncclComm_t comms[numGPU];
+    // Initializing NCCL
+    NCCLCHECK(ncclCommInitAll(comms, numGPU, devs));
+
+
+
+
+
+    // Create eta array for each GPU
+    double **etas = (double **)malloc(numGPU * sizeof(double *));
+
+    const double w_max = 1.0;
+    const double eps = config.eps;
+    const double eta_max = config.eta_max;
+    const double eta_min = eps / w_max;
+    const double lambda = log(eta_max / eta_min) / ((double) config.iter_max - 1);
+
+    #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaMallocManaged(&etas[i], config.iter_max * sizeof(double)));
+        for (int j = 0; j < config.iter_max; j++) {
+            double eta = eta_max * exp(-lambda * (std::abs(j - config.iter_with_max_learning_rate)));
+            etas[i][j] = isnan(eta)? eta_min : eta;
+        }
+    }
+
+    // Create node data structure for each GPU
+    cuda::node_data_t *node_data = (cuda::node_data_t *)malloc(numGPU * sizeof(cuda::node_data_t));
+    uint32_t node_count = graph.get_node_count();
+
+    #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaMallocManaged(&node_data[i].nodes, graph.get_node_count() * sizeof(cuda::node_t)));
+
+        for (int node_idx = 0; node_idx < node_count; node_idx++) {
+            cuda::node_t *n_tmp = &node_data[i].nodes[node_idx];
+
+            // sequence length
+            const handlegraph::handle_t h = graph.get_handle(node_idx + 1, false);
+            // NOTE: unable store orientation (reverse), since this information is path dependent
+            n_tmp->seq_length = graph.get_length(h);
+
+            // copy random coordinates
+            n_tmp->coords[0] = float(X[node_idx * 2].load());
+            n_tmp->coords[1] = float(Y[node_idx * 2].load());
+            n_tmp->coords[2] = float(X[node_idx * 2 + 1].load());
+            n_tmp->coords[3] = float(Y[node_idx * 2 + 1].load());
+        }
+    }
+
+    // Create path data structure for each GPU. 
+    cuda::path_data_t *path_data = (cuda::path_data_t *)malloc(numGPU * sizeof(cuda::path_data_t));
+    uint32_t path_count = graph.get_path_count();
+
+    // each GPU has its own path data
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaMallocManaged(&path_data[i].paths, path_count * sizeof(cuda::path_t)));
+
+        path_data[i].path_count = path_count;
+        path_data[i].total_path_steps = 0;
+
+        std::vector<odgi::path_handle_t> path_handles{};
+        path_handles.reserve(path_count);
+        graph.for_each_path_handle(
+            [&] (const odgi::path_handle_t& p) {
+                path_handles.push_back(p);
+                path_data[i].total_path_steps += graph.get_step_count(p);
+            });
+
+        CUDACHECK(cudaMallocManaged(&path_data[i].element_array, path_data[i].total_path_steps * sizeof(path_element_t)));
+
+        // get length and starting position of all paths
+        uint64_t first_step_counter = 0;
+        for (int path_idx = 0; path_idx < path_count; path_idx++) {
+            odgi::path_handle_t p = path_handles[path_idx];
+            int step_count = graph.get_step_count(p);
+            path_data[i].paths[path_idx].step_count = step_count;
+            path_data[i].paths[path_idx].first_step_in_path = first_step_counter;
+            first_step_counter += step_count;
+        }
+
+        #pragma omp parallel for num_threads(config.nthreads)
+        for (int path_idx = 0; path_idx < path_count; path_idx++) {
+            odgi::path_handle_t p = path_handles[path_idx];
+            uint32_t step_count = path_data[i].paths[path_idx].step_count;
+            uint64_t first_step_in_path = path_data[i].paths[path_idx].first_step_in_path;
+            if (step_count == 0) {
+                path_data[i].paths[path_idx].elements = NULL;
+            } else {
+                path_element_t *cur_path = &path_data[i].element_array[first_step_in_path];
+                path_data[i].paths[path_idx].elements = cur_path;
+
+                odgi::step_handle_t s = graph.path_begin(p);
+                int64_t pos = 1;
+                // Iterate through path
+                for (int step_idx = 0; step_idx < step_count; step_idx++) {
+                    odgi::handle_t h = graph.get_handle_of_step(s);
+
+                    cur_path[step_idx].node_id = graph.get_id(h) - 1;
+                    cur_path[step_idx].pidx = uint32_t(path_idx);
+                    // store position negative when handle reverse
+                    if (graph.get_is_reverse(h)) {
+                        cur_path[step_idx].pos = -pos;
+                    } else {
+                        cur_path[step_idx].pos = pos;
+                    }
+                    pos += graph.get_length(h);
+
+                    // get next step
+                    if (graph.has_next_step(s)) {
+                        s = graph.get_next_step(s);
+                    } else if (!(step_idx == step_count-1)) {
+                        // should never be reached
+                        std::cout << "Error: Here should be another step" << std::endl;
+                    }
+                }
+            }
+        }
+    }
+    
+    // create zetas for each GPU
+    double **zetas = (double **)malloc(numGPU * sizeof(double *));
+    uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
+
+    #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaMallocManaged(&zetas[i], zetas_cnt * sizeof(double)));
+        double zeta_tmp = 0.0;
+        for (uint64_t j = 1; j < config.space + 1; j++) {
+            zeta_tmp += dirtyzipf::fast_precise_pow(1.0 / j, config.theta);
+            if (j <= config.space_max) {
+                zetas[i][j] = zeta_tmp;
+            }
+            if (j >= config.space_max && (j - config.space_max) % config.space_quantization_step == 0) {
+                zetas[i][config.space_max + 1 + (j - config.space_max) / config.space_quantization_step] = zeta_tmp;
+            }
+        }
+    }
+
+
+    // Create random states for each GPU
+    curandState_t **rnd_state_tmp = (curandState_t **)malloc(numGPU * sizeof(curandState_t *));
+    curandStateCoalesced_t **rnd_state = (curandStateCoalesced_t **)malloc(numGPU * sizeof(curandStateCoalesced_t *));
+
+    const uint64_t block_size = BLOCK_SIZE;
+
+    // for each GPU device, it has its own random state
+    #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaStreamCreate(&s[i]));
+
+        std::cout << "Init random state for device " << i << "..." << std::endl;
+        CUDACHECK(cudaMallocManaged(&rnd_state_tmp[i], sm_count * block_size * sizeof(curandState_t)));
+        CUDACHECK(cudaMallocManaged(&rnd_state[i], sm_count * sizeof(curandStateCoalesced_t)));
+        cuda_device_init<<<sm_count, block_size>>>(rnd_state_tmp[i], rnd_state[i], i);
+        CUDACHECK(cudaGetLastError());
+    }
+
+    #pragma omp parallel for num_threads(numGPU)
+    for (int i = 0; i < numGPU; i++) {
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaDeviceSynchronize());
+        CUDACHECK(cudaFree(rnd_state_tmp[i]));
+        std::cout << "Random state for device " << i << " initialized." << std::endl;
+    }
+    free(rnd_state_tmp);
 
 
 
@@ -635,144 +808,16 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "gpu_data_reuse_factor: " << config.gpu_data_reuse_factor << "\t" << "gpu_step_decrease_factor: " << config.gpu_step_decrease_factor << std::endl;
 
 
-    // create eta array
-    double *etas;
-    cudaMallocManaged(&etas, config.iter_max * sizeof(double));
-
-    const int32_t iter_max = config.iter_max;
-    const int32_t iter_with_max_learning_rate = config.iter_with_max_learning_rate;
-    const double w_max = 1.0;
-    const double eps = config.eps;
-    const double eta_max = config.eta_max;
-    const double eta_min = eps / w_max;
-    const double lambda = log(eta_max / eta_min) / ((double) iter_max - 1);
-    for (int32_t i = 0; i < config.iter_max; i++) {
-        double eta = eta_max * exp(-lambda * (std::abs(i - iter_with_max_learning_rate)));
-        etas[i] = isnan(eta)? eta_min : eta;
-    }
 
 
-    // create node data structure
-    // consisting of sequence length and coords
-    uint32_t node_count = graph.get_node_count();
-#ifdef PRINT_INFO
-    std::cout << "node_count: " << node_count << std::endl;
-#endif
-    assert(graph.min_node_id() == 1);
-    assert(graph.max_node_id() == node_count);
-    assert(graph.max_node_id() - graph.min_node_id() + 1 == node_count);
-
-    cuda::node_data_t node_data;
-    node_data.node_count = node_count;
-    cudaMallocManaged(&node_data.nodes, node_count * sizeof(cuda::node_t));
-    for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        //assert(graph.has_node(node_idx));
-        cuda::node_t *n_tmp = &node_data.nodes[node_idx];
-
-        // sequence length
-        const handlegraph::handle_t h = graph.get_handle(node_idx + 1, false);
-        // NOTE: unable store orientation (reverse), since this information is path dependent
-        n_tmp->seq_length = graph.get_length(h);
-
-        // copy random coordinates
-        n_tmp->coords[0] = float(X[node_idx * 2].load());
-        n_tmp->coords[1] = float(Y[node_idx * 2].load());
-        n_tmp->coords[2] = float(X[node_idx * 2 + 1].load());
-        n_tmp->coords[3] = float(Y[node_idx * 2 + 1].load());
-    }
 
 
-    // create path data structure
-    uint32_t path_count = graph.get_path_count();
-    cuda::path_data_t path_data;
-    path_data.path_count = path_count;
-    path_data.total_path_steps = 0;
-    cudaMallocManaged(&path_data.paths, path_count * sizeof(cuda::path_t));
-
-    vector<odgi::path_handle_t> path_handles{};
-    path_handles.reserve(path_count);
-    graph.for_each_path_handle(
-        [&] (const odgi::path_handle_t& p) {
-            path_handles.push_back(p);
-            path_data.total_path_steps += graph.get_step_count(p);
-        });
-    cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
-
-    // get length and starting position of all paths
-    uint64_t first_step_counter = 0;
-    for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        odgi::path_handle_t p = path_handles[path_idx];
-        int step_count = graph.get_step_count(p);
-        path_data.paths[path_idx].step_count = step_count;
-        path_data.paths[path_idx].first_step_in_path = first_step_counter;
-        first_step_counter += step_count;
-    }
-
-#pragma omp parallel for num_threads(config.nthreads)
-    for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        odgi::path_handle_t p = path_handles[path_idx];
-        //std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
-
-        uint32_t step_count = path_data.paths[path_idx].step_count;
-        uint64_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
-        if (step_count == 0) {
-            path_data.paths[path_idx].elements = NULL;
-        } else {
-            path_element_t *cur_path = &path_data.element_array[first_step_in_path];
-            path_data.paths[path_idx].elements = cur_path;
-
-            odgi::step_handle_t s = graph.path_begin(p);
-            int64_t pos = 1;
-            // Iterate through path
-            for (int step_idx = 0; step_idx < step_count; step_idx++) {
-                odgi::handle_t h = graph.get_handle_of_step(s);
-                //std::cout << graph.get_id(h) << std::endl;
-
-                cur_path[step_idx].node_id = graph.get_id(h) - 1;
-                cur_path[step_idx].pidx = uint32_t(path_idx);
-                // store position negative when handle reverse
-                if (graph.get_is_reverse(h)) {
-                    cur_path[step_idx].pos = -pos;
-                } else {
-                    cur_path[step_idx].pos = pos;
-                }
-                pos += graph.get_length(h);
-
-                // get next step
-                if (graph.has_next_step(s)) {
-                    s = graph.get_next_step(s);
-                } else if (!(step_idx == step_count-1)) {
-                    // should never be reached
-                    std::cout << "Error: Here should be another step" << std::endl;
-                }
-            }
-        }
-    }
 
 
-    // cache zipf zetas
-    auto start_zeta = std::chrono::high_resolution_clock::now();
-    double *zetas;
-    uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
-#ifdef PRINT_INFO
-    std::cout << "zetas_cnt: " << zetas_cnt << std::endl;
-    std::cout << "space_max: " << config.space_max << std::endl;
-    std::cout << "config.space: " << config.space << std::endl;
-    std::cout << "config.space_quantization: " << config.space_quantization_step << std::endl;
-#endif
-    cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
-    double zeta_tmp = 0.0;
-    for (uint64_t i = 1; i < config.space + 1; i++) {
-        zeta_tmp += dirtyzipf::fast_precise_pow(1.0 / i, config.theta);
-        if (i <= config.space_max) {
-            zetas[i] = zeta_tmp;
-        }
-        if (i >= config.space_max && (i - config.space_max) % config.space_quantization_step == 0) {
-            zetas[config.space_max + 1 + (i - config.space_max) / config.space_quantization_step] = zeta_tmp;
-        }
-    }
-    auto end_zeta = std::chrono::high_resolution_clock::now();
-    uint32_t duration_zeta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_zeta - start_zeta).count();
+
+
+
+
 #ifdef PRINT_INFO
     std::cout << "Zeta precompute took " << duration_zeta_ms << "ms" << std::endl;
 #endif
@@ -784,7 +829,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // std::cout << "cuda gpu layout" << std::endl;
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 #endif
-    const uint64_t block_size = BLOCK_SIZE;
+
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
 
     // block_nbr = block_nbr / STEP_DECREASE_FACTOR; but note the type conversion
@@ -794,88 +839,62 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #endif
 
 
-    // use multiple GPUs to launch this kernel synchronously
-
-    std::cout << "Number of GPUs used: " << numGPU << std::endl;
-
-    // int nDev = 4;
-    
-    int *devs = new int[numGPU];
-    for (int i = 0; i < numGPU; i++) {
-        devs[i] = i;
-    }
-    
-    cudaStream_t* s = (cudaStream_t*)malloc(numGPU * sizeof(cudaStream_t));
-
-    // Device-specific temporary buffers
-    curandState_t **rnd_state_tmp = (curandState_t **)malloc(numGPU * sizeof(curandState_t *));
-    curandStateCoalesced_t **rnd_state = (curandStateCoalesced_t **)malloc(numGPU * sizeof(curandStateCoalesced_t *));
-
-    // for each GPU device, it has its own random state
-    #pragma omp parallel for num_threads(numGPU)
-    for (int i = 0; i < numGPU; i++) {
-        CUDACHECK(cudaSetDevice(devs[i]));
-        CUDACHECK(cudaStreamCreate(&s[i]));
-
-        std::cout << "Init random state for device " << i << "..." << std::endl;
-        CUDACHECK(cudaMallocManaged(&rnd_state_tmp[i], sm_count * block_size * sizeof(curandState_t)));
-        CUDACHECK(cudaMallocManaged(&rnd_state[i], sm_count * sizeof(curandStateCoalesced_t)));
-        cuda_device_init<<<sm_count, block_size>>>(rnd_state_tmp[i], rnd_state[i]);
-        CUDACHECK(cudaGetLastError());
-    }
-
-    #pragma omp parallel for num_threads(numGPU)
-    for (int i = 0; i < numGPU; i++) {
-        CUDACHECK(cudaSetDevice(devs[i]));
-        CUDACHECK(cudaDeviceSynchronize());
-        CUDACHECK(cudaFree(rnd_state_tmp[i]));
-        std::cout << "Random state for device " << i << " initialized." << std::endl;
-    }
-    free(rnd_state_tmp);
-    
 
 
-    // curandState_t *rnd_state_tmp;
-    // curandStateCoalesced_t *rnd_state;
-    // cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t));
-
-    // for each GPU device, it has its own random state
-    
-
-    // tmp_error = cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t));
-
-    // cuda_device_init<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);
-    // tmp_error = cudaDeviceSynchronize();
-
-    // cudaFree(rnd_state_tmp);
-
-
-
-    // #pragma omp parallel for num_threads(numGPU)
+    std::cout << "Sync frequency: " << sync_freq << std::endl;
 
 
     for (int iter = 0; iter < config.iter_max; iter++) {
-        for (int i = 0; i < numGPU; i++) {
-            CUDACHECK(cudaSetDevice(devs[i]));
-            // cuda_device_layout<<<(block_nbr / numGPU), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[iter], zetas, node_data, path_data, sm_count);
-            cuda_device_layout<<<(block_nbr), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[iter], zetas, node_data, path_data, sm_count);
-            CUDACHECK(cudaGetLastError());
-            // CUDACHECK(cudaDeviceSynchronize());
+        for (int sync_idx = 0; sync_idx < sync_freq; sync_idx++) {
+
+            for (int i = 0; i < numGPU; i++) {
+                CUDACHECK(cudaSetDevice(devs[i]));
+                // cuda_device_layout<<<(block_nbr), block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[i][iter], zetas[i], node_data[i], path_data[i], sm_count);
+                uint64_t normalized_block_nbr = block_nbr / numGPU / sync_freq;
+                // std::cout << "Normalized block number: " << normalized_block_nbr << std::endl;
+                cuda_device_layout<<<normalized_block_nbr, block_size, 0, s[i]>>>(iter, config, rnd_state[i], etas[i][iter], zetas[i], node_data[i], path_data[i], sm_count);
+                CUDACHECK(cudaGetLastError());
+                // CUDACHECK(cudaDeviceSynchronize());
+            }
+
+            for (int i = 0; i < numGPU; i++) {
+                CUDACHECK(cudaSetDevice(devs[i]));
+                CUDACHECK(cudaStreamSynchronize(s[i]));
+            }
+            
+            // NCCL AllReduce
+            if (numGPU > 1) {
+                NCCLCHECK(ncclGroupStart());
+                for (int i = 0; i < numGPU; i++) {
+                    CUDACHECK(cudaSetDevice(devs[i]));
+
+                    // separate allreduce
+                    // for (int node_idx = 0; node_idx < node_count; node_idx++) {
+                    //     NCCLCHECK(ncclAllReduce((const void*)node_data[i].nodes[node_idx].coords, (void*)node_data[i].nodes[node_idx].coords, 4, ncclFloat, ncclAvg, comms[i], s[i]));
+                    //     // NCCLCHECK(ncclAllReduce((const void*)node_data[i].nodes[node_idx].coords, (void*)node_data[i].nodes[node_idx].coords, 4, ncclFloat, ncclSum, comms[i], s[i]));
+                    // }
+
+                    // combine allreduce
+                    NCCLCHECK(ncclAllReduce((const void*)node_data[i].nodes, (void*)node_data[i].nodes, node_count * 5, ncclFloat, ncclAvg, comms[i], s[i]));
+                }
+                NCCLCHECK(ncclGroupEnd());
+                for (int i = 0; i < numGPU; i++) {
+                    CUDACHECK(cudaSetDevice(devs[i]));
+                    CUDACHECK(cudaStreamSynchronize(s[i]));
+                }
+            }
+
         }
 
-        for (int i = 0; i < numGPU; i++) {
-            CUDACHECK(cudaSetDevice(devs[i]));
-            CUDACHECK(cudaStreamSynchronize(s[i]));
-        }
-        std::cout << "Iteration " << iter << " finished." << std::endl;
+        // std::cout << "Iteration " << iter << " finished." << std::endl;
     }
 
-    // Wait for all modifications to complete
-    // #pragma omp parallel for num_threads(numGPU)
-    // for (int i = 0; i < numGPU; ++i) {
-    //     CUDACHECK(cudaSetDevice(devs[i]));
-    //     CUDACHECK(cudaStreamSynchronize(s[i]));
-    // }    
+
+
+    // Finalizing NCCL
+    for (int i = 0; i < numGPU; ++i) {
+        ncclCommDestroy(comms[i]);
+    }
 
     // Free
     // #pragma omp parallel for num_threads(numGPU)
@@ -886,11 +905,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     free(s);
     delete[] devs;
 
-    // for (int iter = 0; iter < config.iter_max; iter++) {
-    //     cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data);
-    //     cudaError_t error = cudaDeviceSynchronize();
-    //     // std::cout << "CUDA Error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
-    // }
 
 #else
     cpu_layout(config, etas, zetas, node_data, path_data);
@@ -904,7 +918,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     // copy coords back to X, Y vectors
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        cuda::node_t *n = &(node_data.nodes[node_idx]);
+        cuda::node_t *n = &(node_data[0].nodes[node_idx]); // only use the first GPU's data
         // coords[0], coords[1], coords[2], coords[3] are stored consecutively. 
         float *coords = n->coords;
         // check if coordinates valid (not NaN or infinite)
@@ -922,18 +936,20 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
 
     // get rid of CUDA data structures
-    cudaFree(etas);
-    cudaFree(node_data.nodes);
-    cudaFree(path_data.paths);
-    cudaFree(path_data.element_array);
-    cudaFree(zetas);
-#ifdef USE_GPU
     for (int i = 0; i < numGPU; i++) {
-        CUDACHECK(cudaSetDevice(i));
+        CUDACHECK(cudaSetDevice(devs[i]));
+        CUDACHECK(cudaFree(etas[i]));
+        CUDACHECK(cudaFree(node_data[i].nodes));
+        CUDACHECK(cudaFree(path_data[i].paths));
+        CUDACHECK(cudaFree(path_data[i].element_array));
+        CUDACHECK(cudaFree(zetas[i]));
         CUDACHECK(cudaFree(rnd_state[i]));
     }
-    cudaFree(rnd_state);
-#endif
+    free(etas);
+    free(node_data);
+    free(path_data);
+    free(zetas);
+    free(rnd_state);
 
 
 #ifdef cuda_layout_profiling
