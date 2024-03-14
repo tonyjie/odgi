@@ -101,10 +101,12 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     uint32_t s2_idx;
 
     bool cooling = (iter >= config.first_cooling_iteration) || (curand(thread_rnd_state) % 2 == 0);
-    // bool cooling = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) > 0.5);
+    // bool cooling = (iter >= config.first_cooling_iteration) || (tid % 2 == 0);
+    // bool cooling = (tid % 2 == 0);
+
     if (cooling) {
         if (s1_idx > 0 && (curand(thread_rnd_state) % 2 == 0) || s1_idx == p.step_count - 1) {
-        // if (s1_idx > 0 && (curand_uniform(thread_rnd_state) > 0.5) || s1_idx == p.step_count-1) {
+        // if (s1_idx > 0 && (tid % 2 == 0) || s1_idx == p.step_count - 1) {
             // go backward
             uint32_t jump_space = min(config.space, s1_idx);
             uint32_t space = jump_space;
@@ -135,183 +137,13 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
             assert(s1_idx + z_i < p.step_count);
             s2_idx = s1_idx + z_i;
         }
-#ifdef CREATE_DIV
-
-        assert(s1_idx < p.step_count);
-        assert(s2_idx < p.step_count);
-        assert(s1_idx != s2_idx);
-
-
-        uint32_t n1_id = node_id_array[p.first_step_in_path + s1_idx];
-        int64_t n1_pos_in_path = pos_array[p.first_step_in_path + s1_idx];
-        bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
-        n1_pos_in_path = std::abs(n1_pos_in_path);
-
-        uint32_t n2_id = node_id_array[p.first_step_in_path + s2_idx];
-        int64_t n2_pos_in_path = pos_array[p.first_step_in_path + s2_idx];
-        bool n2_is_rev = (n2_pos_in_path < 0)? true: false;
-        n2_pos_in_path = std::abs(n2_pos_in_path);
-
-        uint32_t n1_seq_length = seq_length_array[n1_id];
-        bool n1_use_other_end = (curand(thread_rnd_state) % 2 == 0) ? true: false;
-        // bool n1_use_other_end = (curand_uniform(thread_rnd_state) > 0.5) ? true: false;
-        if (n1_use_other_end) {
-            n1_pos_in_path += uint64_t{n1_seq_length};
-            n1_use_other_end = !n1_is_rev;
-        } else {
-            n1_use_other_end = n1_is_rev;
-        }
-
-        uint32_t n2_seq_length = seq_length_array[n2_id];
-        bool n2_use_other_end = (curand(thread_rnd_state) % 2 == 0) ? true: false;
-        // bool n2_use_other_end = (curand_uniform(thread_rnd_state) > 0.5) ? true: false;
-        if (n2_use_other_end) {
-            n2_pos_in_path += uint64_t{n2_seq_length};
-            n2_use_other_end = !n2_is_rev;
-        } else {
-            n2_use_other_end = n2_is_rev;
-        }
-
-        double term_dist = std::abs(static_cast<double>(n1_pos_in_path) - static_cast<double>(n2_pos_in_path));
-
-        if (term_dist < 1e-9) {
-            term_dist = 1e-9;
-        }
-
-        double w_ij = 1.0 / term_dist;
-
-        double mu = eta * w_ij;
-        if (mu > 1.0) {
-            mu = 1.0;
-        }
-
-        double d_ij = term_dist;
-
-        int n1_offset = n1_use_other_end? 1: 0;
-        int n2_offset = n2_use_other_end? 1: 0;
-
-        float *x1 = &x_coords[n1_id * 2 + n1_offset];
-        float *x2 = &x_coords[n2_id * 2 + n2_offset];
-        float *y1 = &y_coords[n1_id * 2 + n1_offset];
-        float *y2 = &y_coords[n2_id * 2 + n2_offset];
-        double x1_val = double(*x1);
-        double x2_val = double(*x2);
-        double y1_val = double(*y1);
-        double y2_val = double(*y2);
-
-        double dx = x1_val - x2_val;
-        double dy = y1_val - y2_val;
-
-        if (dx == 0.0) {
-            dx = 1e-9;
-        }
-
-        double mag = sqrt(dx * dx + dy * dy);
-        double delta = mu * (mag - d_ij) / 2.0;
-        //double delta_abs = std::abs(delta);
-
-        double r = delta / mag;
-        double r_x = r * dx;
-        double r_y = r * dy;
-        atomicExch(x1, float(x1_val - r_x));
-        atomicExch(x2, float(x2_val + r_x));
-        atomicExch(y1, float(y1_val - r_y));
-        atomicExch(y2, float(y2_val + r_y));
-
-
-#endif        
     } else {
         do {
             s2_idx = curand(thread_rnd_state) % p.step_count;
             // s2_idx = (uint32_t)((1 - curand_uniform(thread_rnd_state)) * (float)p.step_count);
         } while (s1_idx == s2_idx);
-#ifdef CREATE_DIV
-
-        assert(s1_idx < p.step_count);
-        assert(s2_idx < p.step_count);
-        assert(s1_idx != s2_idx);
-
-
-        uint32_t n1_id = node_id_array[p.first_step_in_path + s1_idx];
-        int64_t n1_pos_in_path = pos_array[p.first_step_in_path + s1_idx];
-        bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
-        n1_pos_in_path = std::abs(n1_pos_in_path);
-
-        uint32_t n2_id = node_id_array[p.first_step_in_path + s2_idx];
-        int64_t n2_pos_in_path = pos_array[p.first_step_in_path + s2_idx];
-        bool n2_is_rev = (n2_pos_in_path < 0)? true: false;
-        n2_pos_in_path = std::abs(n2_pos_in_path);
-
-        uint32_t n1_seq_length = seq_length_array[n1_id];
-        bool n1_use_other_end = (curand(thread_rnd_state) % 2 == 0) ? true: false;
-        // bool n1_use_other_end = (curand_uniform(thread_rnd_state) > 0.5) ? true: false;
-        if (n1_use_other_end) {
-            n1_pos_in_path += uint64_t{n1_seq_length};
-            n1_use_other_end = !n1_is_rev;
-        } else {
-            n1_use_other_end = n1_is_rev;
-        }
-
-        uint32_t n2_seq_length = seq_length_array[n2_id];
-        bool n2_use_other_end = (curand(thread_rnd_state) % 2 == 0) ? true: false;
-        // bool n2_use_other_end = (curand_uniform(thread_rnd_state) > 0.5) ? true: false;
-        if (n2_use_other_end) {
-            n2_pos_in_path += uint64_t{n2_seq_length};
-            n2_use_other_end = !n2_is_rev;
-        } else {
-            n2_use_other_end = n2_is_rev;
-        }
-
-        double term_dist = std::abs(static_cast<double>(n1_pos_in_path) - static_cast<double>(n2_pos_in_path));
-
-        if (term_dist < 1e-9) {
-            term_dist = 1e-9;
-        }
-
-        double w_ij = 1.0 / term_dist;
-
-        double mu = eta * w_ij;
-        if (mu > 1.0) {
-            mu = 1.0;
-        }
-
-        double d_ij = term_dist;
-
-        int n1_offset = n1_use_other_end? 1: 0;
-        int n2_offset = n2_use_other_end? 1: 0;
-
-        float *x1 = &x_coords[n1_id * 2 + n1_offset];
-        float *x2 = &x_coords[n2_id * 2 + n2_offset];
-        float *y1 = &y_coords[n1_id * 2 + n1_offset];
-        float *y2 = &y_coords[n2_id * 2 + n2_offset];
-        double x1_val = double(*x1);
-        double x2_val = double(*x2);
-        double y1_val = double(*y1);
-        double y2_val = double(*y2);
-
-        double dx = x1_val - x2_val;
-        double dy = y1_val - y2_val;
-
-        if (dx == 0.0) {
-            dx = 1e-9;
-        }
-
-        double mag = sqrt(dx * dx + dy * dy);
-        double delta = mu * (mag - d_ij) / 2.0;
-        //double delta_abs = std::abs(delta);
-
-        double r = delta / mag;
-        double r_x = r * dx;
-        double r_y = r * dy;
-        atomicExch(x1, float(x1_val - r_x));
-        atomicExch(x2, float(x2_val + r_x));
-        atomicExch(y1, float(y1_val - r_y));
-        atomicExch(y2, float(y2_val + r_y));
-
-#endif  
     }
 
-#ifndef CREATE_DIV
     assert(s1_idx < p.step_count);
     assert(s2_idx < p.step_count);
     assert(s1_idx != s2_idx);
@@ -329,7 +161,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     uint32_t n1_seq_length = seq_length_array[n1_id];
     bool n1_use_other_end = (curand(thread_rnd_state) % 2 == 0) ? true: false;
-    // bool n1_use_other_end = (curand_uniform(thread_rnd_state) > 0.5) ? true: false;
+    // bool n1_use_other_end = (tid % 2 == 0) ? true: false;
     if (n1_use_other_end) {
         n1_pos_in_path += uint64_t{n1_seq_length};
         n1_use_other_end = !n1_is_rev;
@@ -339,7 +171,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     uint32_t n2_seq_length = seq_length_array[n2_id];
     bool n2_use_other_end = (curand(thread_rnd_state) % 2 == 0) ? true: false;
-    // bool n2_use_other_end = (curand_uniform(thread_rnd_state) > 0.5) ? true: false;
+    // bool n2_use_other_end = (tid % 2 == 0) ? true: false;
     if (n2_use_other_end) {
         n2_pos_in_path += uint64_t{n2_seq_length};
         n2_use_other_end = !n2_is_rev;
@@ -392,7 +224,29 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     atomicExch(x2, float(x2_val + r_x));
     atomicExch(y1, float(y1_val - r_y));
     atomicExch(y2, float(y2_val + r_y));
-#endif
+
+
+    // add dummy code
+    for (int i = 0; i < 5000; i++) {
+        // Warp divergence example based on thread ID
+        if (threadIdx.x % 2 == 0) {
+            for (int i = 0; i < threadIdx.x % 5; ++i) {  // Loop a different number of times based on thread ID
+                s1_idx = (s1_idx + 1) % p.step_count;  // Just a dummy operation to create divergence
+            }
+        } else {
+            for (int i = 0; i < threadIdx.x % 3; ++i) {  // Different loop for odd and even thread IDs
+                s2_idx = (s2_idx + 1) % p.step_count;  // Another dummy operation
+            }
+        }
+
+        // Warp divergence based on random condition
+        bool random_condition = curand_uniform(thread_rnd_state) > 0.5;
+        if (random_condition) {
+            s1_idx = (s1_idx + 7) % p.step_count;  // Arbitrary changes based on a random condition
+        } else {
+            s2_idx = (s2_idx + 11) % p.step_count;  // Different arbitrary change
+        }    
+    }
 }
 
 
