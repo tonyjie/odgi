@@ -3,6 +3,8 @@
 #include <assert.h>
 #include "cuda_runtime_api.h"
 
+// #define WARP_SAME_PATH
+
 #define CUDACHECK(cmd) do {                         \
   cudaError_t err = cmd;                            \
   if (err != cudaSuccess) {                         \
@@ -85,19 +87,22 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
 
     // select path
-    // __shared__ uint32_t first_step_idx[32];
-    // if (threadIdx.x % 32 == 0) {
-    //     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    //     first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(path_data.total_path_steps)));
-    //     assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
-    // }
-    // __syncwarp();
+#ifdef WARP_SAME_PATH
+    __shared__ uint32_t first_step_idx[32];
+    if (threadIdx.x % 32 == 0) {
+        // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
+        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(path_data.total_path_steps)));
+        assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
+    }
+    __syncwarp();
 
     // find path of step of specific thread with LUT (threads in warp pick same path)
-    // uint32_t step_idx = first_step_idx[threadIdx.x / 32];
+    uint32_t step_idx = first_step_idx[threadIdx.x / 32];
+#else
 
     // each thread picks its own path
     uint32_t step_idx = curand(thread_rnd_state) % path_data.total_path_steps;
+#endif
     uint32_t path_idx = pidx_array[step_idx];
 
 
