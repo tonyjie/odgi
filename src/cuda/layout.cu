@@ -227,26 +227,26 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
 
     // add dummy code
-    for (int i = 0; i < 5000; i++) {
-        // Warp divergence example based on thread ID
-        if (threadIdx.x % 2 == 0) {
-            for (int i = 0; i < threadIdx.x % 5; ++i) {  // Loop a different number of times based on thread ID
-                s1_idx = (s1_idx + 1) % p.step_count;  // Just a dummy operation to create divergence
-            }
-        } else {
-            for (int i = 0; i < threadIdx.x % 3; ++i) {  // Different loop for odd and even thread IDs
-                s2_idx = (s2_idx + 1) % p.step_count;  // Another dummy operation
-            }
-        }
+    // for (int i = 0; i < 5000; i++) {
+    //     // Warp divergence example based on thread ID
+    //     if (threadIdx.x % 2 == 0) {
+    //         for (int i = 0; i < threadIdx.x % 5; ++i) {  // Loop a different number of times based on thread ID
+    //             s1_idx = (s1_idx + 1) % p.step_count;  // Just a dummy operation to create divergence
+    //         }
+    //     } else {
+    //         for (int i = 0; i < threadIdx.x % 3; ++i) {  // Different loop for odd and even thread IDs
+    //             s2_idx = (s2_idx + 1) % p.step_count;  // Another dummy operation
+    //         }
+    //     }
 
-        // Warp divergence based on random condition
-        bool random_condition = curand_uniform(thread_rnd_state) > 0.5;
-        if (random_condition) {
-            s1_idx = (s1_idx + 7) % p.step_count;  // Arbitrary changes based on a random condition
-        } else {
-            s2_idx = (s2_idx + 11) % p.step_count;  // Different arbitrary change
-        }    
-    }
+    //     // Warp divergence based on random condition
+    //     bool random_condition = curand_uniform(thread_rnd_state) > 0.5;
+    //     if (random_condition) {
+    //         s1_idx = (s1_idx + 7) % p.step_count;  // Arbitrary changes based on a random condition
+    //     } else {
+    //         s2_idx = (s2_idx + 11) % p.step_count;  // Different arbitrary change
+    //     }    
+    // }
 }
 
 
