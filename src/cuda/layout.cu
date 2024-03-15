@@ -3,7 +3,7 @@
 #include <assert.h>
 #include "cuda_runtime_api.h"
 
-// #define WARP_SAME_PATH
+#define WARP_SAME_PATH
 
 #define CUDACHECK(cmd) do {                         \
   cudaError_t err = cmd;                            \
@@ -78,26 +78,26 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
     assert(smid < sm_count);
-    curandState *thread_rnd_state = &rnd_state[smid * 1024 + threadIdx.x];
+    curandState *thread_rnd_state = &rnd_state[smid * BLOCK_SIZE + threadIdx.x];
 
-    __shared__ bool cooling[32];
-    if (threadIdx.x % 32 == 1) {
-        // cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) <= 0.5);
-        cooling[threadIdx.x / 32] = (iter >= config.first_cooling_iteration) || (curand(thread_rnd_state) % 2 == 0);
+    __shared__ bool cooling[WARP_SIZE];
+    if (threadIdx.x % WARP_SIZE == 1) {
+        // cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) <= 0.5);
+        cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand(thread_rnd_state) % 2 == 0);
     }
 
     // select path
 #ifdef WARP_SAME_PATH
-    __shared__ uint32_t first_step_idx[32];
-    if (threadIdx.x % 32 == 0) {
+    __shared__ uint32_t first_step_idx[WARP_SIZE];
+    if (threadIdx.x % WARP_SIZE == 0) {
         // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-        first_step_idx[threadIdx.x / 32] = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(path_data.total_path_steps)));
-        assert(first_step_idx[threadIdx.x / 32] < path_data.total_path_steps);
+        first_step_idx[threadIdx.x / WARP_SIZE] = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(path_data.total_path_steps)));
+        assert(first_step_idx[threadIdx.x / WARP_SIZE] < path_data.total_path_steps);
     }
     __syncwarp();
 
     // find path of step of specific thread with LUT (threads in warp pick same path)
-    uint32_t step_idx = first_step_idx[threadIdx.x / 32];
+    uint32_t step_idx = first_step_idx[threadIdx.x / WARP_SIZE];
 #else
 
     // each thread picks its own path
@@ -118,7 +118,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
-    if (cooling[threadIdx.x / 32]) {
+    if (cooling[threadIdx.x / WARP_SIZE]) {
         bool backward;
         uint32_t jump_space;
         // if (s1_idx > 0 && (curand_uniform(thread_rnd_state) <= 0.5) || s1_idx == p.step_count-1) {

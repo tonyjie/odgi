@@ -55,6 +55,7 @@ struct path_data_t {
 };
 
 #define BLOCK_SIZE 1024
+#define WARP_SIZE 32
 
 struct layout_config_t {
     uint64_t iter_max;
