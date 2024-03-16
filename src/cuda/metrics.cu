@@ -11,7 +11,14 @@
 // #define COUNT_TIME
 // #define DEBUG
 // #define DEBUG_CHR16
-#define DEBUG_BLOCK
+// #define DEBUG_BLOCK
+
+// #define DISTRIBUTION
+
+#define PRINT_INFO
+
+#define STDDEV
+
 
 #define CUDACHECK(cmd) do {                         \
   cudaError_t err = cmd;                            \
@@ -32,11 +39,6 @@
 } while(0)
 
 
-#define DISTRIBUTION
-
-#define PRINT_INFO
-
-// #define STDDEV
 
 namespace cuda {
 
