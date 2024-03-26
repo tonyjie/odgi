@@ -819,7 +819,7 @@ SET(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCH_LIST})
 message(STATUS "CUDA_ARCH_LIST: ${CUDA_ARCH_LIST}")
 
 # Apply compile options. Detects different GPU compute capability. 
-target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp>)
+target_compile_options(odgi_objs PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -std=c++17 -Xcompiler=-fopenmp -lineinfo>)
 
 add_library(libodgi_static STATIC $<TARGET_OBJECTS:odgi_objs>)
 set_target_properties(libodgi_static PROPERTIES OUTPUT_NAME "odgi")
