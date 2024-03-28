@@ -991,6 +991,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             odgi::step_handle_t s = graph.path_begin(p);
             int64_t pos = 1;
             // Iterate through path
+#ifdef PARTITION
+        // create a bool vector with length of node_count, storing if this node is already visited in the current path
+        std::vector<bool> visited(node_count, false);
+#endif
             for (int step_idx = 0; step_idx < step_count; step_idx++) {
                 odgi::handle_t h = graph.get_handle_of_step(s);
                 //std::cout << graph.get_id(h) << std::endl;
@@ -998,7 +1002,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
                 cur_path[step_idx].node_id = graph.get_id(h) - 1;
                 cur_path[step_idx].pidx = uint32_t(path_idx);
 #ifdef PARTITION
-                node_data.nodes[cur_path[step_idx].node_id].num_paths++; // increase the number of paths that the node is in
+                if (!visited[cur_path[step_idx].node_id]) { // if not visited in the current path iteratio
+                    node_data.nodes[cur_path[step_idx].node_id].num_paths++; // increase the number of paths that the node is in
+                    visited[cur_path[step_idx].node_id] = true;
+                }
 #endif
                 // store position negative when handle reverse
                 if (graph.get_is_reverse(h)) {
@@ -1025,8 +1032,36 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "===== Check the Graph Partition Point =====" << std::endl;
     std::cout << "Path Count: " << path_count << std::endl;
     std::cout << "Node Count: " << node_count << std::endl;
+
+
+    // Let's say we have 8 devices. And we want to partition the graph into 8 parts. 
+    // If equally partitioned by the node_index, check the partition point's node depth. 
+    // int num_device = 8;
+    // int partition_size = node_count / num_device;
+    // int partition_point = partition_size * num_device;
+    // for (int i = 1; i < num_device; i++) {
+    //     // default partition point
+    //     int node_idx = partition_size * i;
+    //     // However, we want to choose the the partition point to cover as much paths as possible. 
+    //     // Experimentally, there are lots of nodes that have (num_path = path_count - 1)
+    //     // So, modify the node_idx to have the closest index which has (num_path = path_count - 1)
+    //     while (node_data.nodes[node_idx].num_paths < path_count - 1) {
+    //         node_idx++;
+    //     }
+    //     std::cout << "Partition Point " << i << ": " << node_idx << "; Index Percentage: " << (double)node_idx / node_count << std::endl;
+    //     std::cout << "Node Depth: " << node_data.nodes[node_idx].num_paths << "; Cover Percentage: " << (double)node_data.nodes[node_idx].num_paths / path_count << std::endl;
+        
+    // }
+
+
+
+
     // how many nodes are shared among all the paths; 90% of the paths
     int shared_nodes_all = 0;
+    int shared_nodes_only_diff_1 = 0;
+    int shared_nodes_only_diff_2 = 0;
+    int shared_nodes_only_diff_3 = 0;
+    int shared_nodes_only_diff_4 = 0;
     int shared_nodes_only_diff_5 = 0;
     int shared_nodes_only_diff_10 = 0;
     int shared_nodes_99 = 0;
@@ -1039,12 +1074,24 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             shared_nodes_all++;
             shared_nodes_all_idx.push_back(node_idx);
         }
-        if (node_data.nodes[node_idx].num_paths >= path_count - 5) {
-            shared_nodes_only_diff_5++;
-        }
-        if (node_data.nodes[node_idx].num_paths >= path_count - 10) {
-            shared_nodes_only_diff_10++;
-        }
+        // if (node_data.nodes[node_idx].num_paths >= path_count - 1) {
+        //     shared_nodes_only_diff_1++;
+        // }
+        // if (node_data.nodes[node_idx].num_paths >= path_count - 2) {
+        //     shared_nodes_only_diff_2++;
+        // }
+        // if (node_data.nodes[node_idx].num_paths >= path_count - 3) {
+        //     shared_nodes_only_diff_3++;
+        // }
+        // if (node_data.nodes[node_idx].num_paths >= path_count - 4) {
+        //     shared_nodes_only_diff_4++;
+        // }
+        // if (node_data.nodes[node_idx].num_paths >= path_count - 5) {
+        //     shared_nodes_only_diff_5++;
+        // }
+        // if (node_data.nodes[node_idx].num_paths >= path_count - 10) {
+        //     shared_nodes_only_diff_10++;
+        // }
         if (node_data.nodes[node_idx].num_paths >= 0.99 * path_count) {
             shared_nodes_99++;
         }
@@ -1056,19 +1103,33 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         }
     }
 
-    std::cout << "Shared Nodes (All Paths): " << shared_nodes_all << std::endl;
-    std::cout << "Shared Nodes (Only Diff 5): " << shared_nodes_only_diff_5 << std::endl;
-    std::cout << "Shared Nodes (Only Diff 10): " << shared_nodes_only_diff_10 << std::endl;
-    std::cout << "Shared Nodes (99% Paths): " << shared_nodes_99 << std::endl;
-    std::cout << "Shared Nodes (95% Paths): " << shared_nodes_95 << std::endl;
-    std::cout << "Shared Nodes (90% Paths): " << shared_nodes_90 << std::endl;
+    // check what is the largest num_path among all the nodes
+    int max_num_path = 0;
+    for (int node_idx = 0; node_idx < node_count; node_idx++) {
+        if (node_data.nodes[node_idx].num_paths > max_num_path) {
+            max_num_path = node_data.nodes[node_idx].num_paths;
+        }
+    }
+    std::cout << "Max Num Path: " << max_num_path << std::endl;
+
+
+    // std::cout << "Shared Nodes (All Paths): " << shared_nodes_all << std::endl;
+    // std::cout << "Shared Nodes (Only Diff 1): " << shared_nodes_only_diff_1 << std::endl;
+    // std::cout << "Shared Nodes (Only Diff 2): " << shared_nodes_only_diff_2 << std::endl;
+    // std::cout << "Shared Nodes (Only Diff 3): " << shared_nodes_only_diff_3 << std::endl;
+    // std::cout << "Shared Nodes (Only Diff 4): " << shared_nodes_only_diff_4 << std::endl;
+    // std::cout << "Shared Nodes (Only Diff 5): " << shared_nodes_only_diff_5 << std::endl;
+    // std::cout << "Shared Nodes (Only Diff 10): " << shared_nodes_only_diff_10 << std::endl;
+    // std::cout << "Shared Nodes (99% Paths): " << shared_nodes_99 << std::endl;
+    // std::cout << "Shared Nodes (95% Paths): " << shared_nodes_95 << std::endl;
+    // std::cout << "Shared Nodes (90% Paths): " << shared_nodes_90 << std::endl;
 
     // print the node index of the shared_nodes_all
-    std::cout << "Shared Nodes (All Paths): ";
-    for (int i = 0; i < shared_nodes_all_idx.size(); i++) {
-        std::cout << shared_nodes_all_idx[i] << " ";
-    }
-
+    // std::cout << "Shared Nodes (All Paths): ";
+    // for (int i = 0; i < shared_nodes_all_idx.size(); i++) {
+    //     std::cout << shared_nodes_all_idx[i] << " ";
+    // }
+    // std::cout << std::endl;
     exit(0);
 #endif
     // cache zipf zetas
