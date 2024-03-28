@@ -14,6 +14,7 @@
 #include "XoshiroCpp.hpp"
 #include "dirty_zipfian_int_distribution.h"
 
+#define PARTITION
 
 #define cuda_layout_profiling
 
@@ -24,6 +25,10 @@ namespace cuda {
 struct __align__(8) node_t {
     float coords[4];
     int32_t seq_length;
+#ifdef PARTITION
+    // add with PARTITION: check how many paths this node is part of
+    uint32_t num_paths;
+#endif
 };
 struct node_data_t {
     uint32_t node_count;

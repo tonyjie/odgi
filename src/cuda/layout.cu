@@ -5,6 +5,7 @@
 // #define PRINT_INFO // whether to print some parameters
 // #define WARP_SAME_PATH
 // #define DEBUG_ZIPF
+#define PARTITION
 
 #define CUDACHECK(cmd) do {                         \
   cudaError_t err = cmd;                            \
@@ -484,22 +485,44 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
     // uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
+
+
+#ifdef PARTITION
+    uint32_t s1_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % (p.step_count / 2);
+    // half chance, s1_idx = s1_idx; half chance, s1_idx = s1_idx + p.step_count / 2;
+    bool first_half = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) ? true: false;
+    if (!first_half) {
+        s1_idx += (p.step_count / 2);
+    }
+#else
     uint32_t s1_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % p.step_count;
+#endif
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
     if (cooling[threadIdx.x / WARP_SIZE]) {
         bool backward;
         uint32_t jump_space;
-        // if (s1_idx > 0 && (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
+#ifdef PARTITION
+        // if (s1_idx > 0 && (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) || s1_idx == p.step_count / 2 - 1) {
+
         if (s1_idx > 0 && (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) || s1_idx == p.step_count-1) {
+#else
+        if (s1_idx > 0 && (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) || s1_idx == p.step_count-1) {
+#endif
             // go backward
             backward = true;
             jump_space = min(config.space, s1_idx);
         } else {
             // go forward
             backward = false;
+#ifdef PARTITION
+            // jump_space = min(config.space, p.step_count / 2 - 1 - s1_idx);
+
             jump_space = min(config.space, p.step_count - s1_idx - 1);
+#else
+            jump_space = min(config.space, p.step_count - s1_idx - 1);
+#endif
         }
         uint32_t space = jump_space;
         if (jump_space > config.space_max) {
@@ -524,11 +547,17 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         }
         */
 
-        s2_idx = backward? s1_idx - z_i: s1_idx + z_i;
+        s2_idx = backward ? s1_idx - z_i: s1_idx + z_i;
     } else {
         do {
-            // s2_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
+#ifdef PARTITION
+            s2_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % (p.step_count / 2);
+            if (!first_half) {
+                s2_idx += (p.step_count / 2);
+            }
+#else
             s2_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % p.step_count;
+#endif
         } while (s1_idx == s2_idx);
     }
     assert(s1_idx < p.step_count);
@@ -968,6 +997,9 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
                 cur_path[step_idx].node_id = graph.get_id(h) - 1;
                 cur_path[step_idx].pidx = uint32_t(path_idx);
+#ifdef PARTITION
+                node_data.nodes[cur_path[step_idx].node_id].num_paths++; // increase the number of paths that the node is in
+#endif
                 // store position negative when handle reverse
                 if (graph.get_is_reverse(h)) {
                     cur_path[step_idx].pos = -pos;
@@ -988,6 +1020,57 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     }
 
 
+#ifdef PARTITION
+    // analyze the graph. First check the nodes that are shared among all the paths. 
+    std::cout << "===== Check the Graph Partition Point =====" << std::endl;
+    std::cout << "Path Count: " << path_count << std::endl;
+    std::cout << "Node Count: " << node_count << std::endl;
+    // how many nodes are shared among all the paths; 90% of the paths
+    int shared_nodes_all = 0;
+    int shared_nodes_only_diff_5 = 0;
+    int shared_nodes_only_diff_10 = 0;
+    int shared_nodes_99 = 0;
+    int shared_nodes_95 = 0;
+    int shared_nodes_90 = 0;
+    // a vector to store the node_idx of shared_nodes_all
+    std::vector<int> shared_nodes_all_idx;
+    for (int node_idx = 0; node_idx < node_count; node_idx++) {
+        if (node_data.nodes[node_idx].num_paths == path_count) {
+            shared_nodes_all++;
+            shared_nodes_all_idx.push_back(node_idx);
+        }
+        if (node_data.nodes[node_idx].num_paths >= path_count - 5) {
+            shared_nodes_only_diff_5++;
+        }
+        if (node_data.nodes[node_idx].num_paths >= path_count - 10) {
+            shared_nodes_only_diff_10++;
+        }
+        if (node_data.nodes[node_idx].num_paths >= 0.99 * path_count) {
+            shared_nodes_99++;
+        }
+        if (node_data.nodes[node_idx].num_paths >= 0.95 * path_count) {
+            shared_nodes_95++;
+        }
+        if (node_data.nodes[node_idx].num_paths >= 0.9 * path_count) {
+            shared_nodes_90++;
+        }
+    }
+
+    std::cout << "Shared Nodes (All Paths): " << shared_nodes_all << std::endl;
+    std::cout << "Shared Nodes (Only Diff 5): " << shared_nodes_only_diff_5 << std::endl;
+    std::cout << "Shared Nodes (Only Diff 10): " << shared_nodes_only_diff_10 << std::endl;
+    std::cout << "Shared Nodes (99% Paths): " << shared_nodes_99 << std::endl;
+    std::cout << "Shared Nodes (95% Paths): " << shared_nodes_95 << std::endl;
+    std::cout << "Shared Nodes (90% Paths): " << shared_nodes_90 << std::endl;
+
+    // print the node index of the shared_nodes_all
+    std::cout << "Shared Nodes (All Paths): ";
+    for (int i = 0; i < shared_nodes_all_idx.size(); i++) {
+        std::cout << shared_nodes_all_idx[i] << " ";
+    }
+
+    exit(0);
+#endif
     // cache zipf zetas
     auto start_zeta = std::chrono::high_resolution_clock::now();
     double *zetas;
