@@ -9,6 +9,7 @@
 #include "algorithms/weakly_connected_components.hpp"
 
 // #define PRINT_INFO // whether to print some parameters
+// #define USE_GPU // whether run GPU implementation or CPU implementation
 
 namespace cuda {
 
@@ -335,7 +336,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 }
 
 
-void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
+
+void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data, const odgi::graph_t &graph, std::vector<std::atomic<double>> &graph_X, std::vector<std::atomic<double>> &graph_Y, uint32_t node_count, std::string &layout_file_name) {
     int nbr_threads = config.nthreads;
     std::cout << "cuda cpu layout (" << nbr_threads << " threads)" << std::endl;
     std::vector<uint64_t> path_dist;
@@ -534,6 +536,12 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 total_duration_sgd += std::chrono::duration_cast<std::chrono::nanoseconds>(after_store - start_sgd);
 #endif
             }
+#pragma omp barrier
+            // save layout after this iteration
+            if (tid == 0) {
+                std::string layout_file_name_iter = layout_file_name + "_" + std::to_string(iter);
+                save_layout_coord(graph, node_data, graph_X, graph_Y, node_count, layout_file_name_iter);
+            }
         }
 
 #ifdef profiling
@@ -684,9 +692,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
     std::cout << "theta: " << config.theta << std::endl;
 #endif
+#ifdef USEGPU
     std::cout << "===== GPU Data Reuse Parameters =====" << std::endl;
     std::cout << "gpu_data_reuse_factor: " << config.gpu_data_reuse_factor << "\t" << "gpu_step_decrease_factor: " << config.gpu_step_decrease_factor << std::endl;
-
+#endif
 
     // create eta array
     double *etas;
@@ -831,8 +840,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #endif
 
     auto start_compute = std::chrono::high_resolution_clock::now();
-#define USE_GPU
-#ifdef USE_GPU
+
+
 #ifdef PRINT_INFO
     // std::cout << "cuda gpu layout" << std::endl;
     std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
@@ -845,6 +854,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #ifdef PRINT_INFO
     std::cout << "block_nbr: " << block_nbr << " block_size: " << block_size << std::endl;
 #endif
+
+#ifdef USE_GPU
     curandState_t *rnd_state_tmp;
     curandStateCoalesced_t *rnd_state;
     cudaError_t tmp_error = cudaMallocManaged(&rnd_state_tmp, SM_COUNT * block_size * sizeof(curandState_t));
@@ -869,9 +880,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         std::string layout_file_name_iter = layout_file_name + "_" + std::to_string(iter);
         save_layout_coord(graph, node_data, X, Y, node_count, layout_file_name_iter);
     }
+#endif
 
-#else
-    cpu_layout(config, etas, zetas, node_data, path_data);
+#ifndef USE_GPU
+    std::string layout_file_name_iter = layout_file_name + "_init";
+    save_layout_coord(graph, node_data, X, Y, node_count, layout_file_name_iter);
+    cpu_layout(config, etas, zetas, node_data, path_data, graph, X, Y, node_count, layout_file_name);
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();

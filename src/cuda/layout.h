@@ -84,4 +84,6 @@ struct layout_config_t {
 
 void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y, std::string &layout_file_name);
 
+void save_layout_coord(const odgi::graph_t &graph, cuda::node_data_t &node_data, std::vector<std::atomic<double>> &graph_X, std::vector<std::atomic<double>> &graph_Y, uint32_t node_count, std::string &layout_file_name_iter);
+
 }
