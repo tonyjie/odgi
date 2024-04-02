@@ -8,12 +8,14 @@
 // #define LOG_STRESS
 // for geometric mean of each term's stress. 
 
-// #define COUNT_TIME
+#define COUNT_TIME
 // #define DEBUG
 // #define DEBUG_CHR16
 // #define DEBUG_BLOCK
 
 // #define DISTRIBUTION
+
+// #define RANDOM_SEED
 
 #define PRINT_INFO
 
@@ -235,10 +237,10 @@ uint32_t cuda_coalesced_metric(curandStateCoalesced_t *state, uint32_t thread_id
 * CUDA kernel to initialize curandStateCoalesced_t
 */
 __global__ 
-void cuda_device_init_metric(curandState_t *rnd_state_tmp, curandStateCoalesced_t *rnd_state) {
+void cuda_device_init_metric(curandState_t *rnd_state_tmp, curandStateCoalesced_t *rnd_state, int input_seed) {
     int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     // initialize curandState with original curand implementation
-    curand_init(42+tid, tid, 0, &rnd_state_tmp[tid]);
+    curand_init(input_seed + tid, tid, 0, &rnd_state_tmp[tid]);
     // curand_init(clock64()+tid, tid, 0, &rnd_state_tmp[tid]);
     // copy to coalesced data structure
     rnd_state[blockIdx.x].d[threadIdx.x] = rnd_state_tmp[tid].d;
@@ -1321,7 +1323,12 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     curandStateCoalesced_t *rnd_state;
     CUDACHECK(cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t)));
     CUDACHECK(cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t)));
-    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);
+#ifdef RANDOM_SEED
+    int input_seed = clock();
+#else
+    int input_seed = 42;
+#endif
+    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state, input_seed);
     CUDACHECK(cudaGetLastError());  
     CUDACHECK(cudaDeviceSynchronize());
     cudaFree(rnd_state_tmp);
@@ -1386,13 +1393,6 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     CUDACHECK(cudaDeviceSynchronize());
 #endif
 
-#ifdef COUNT_TIME
-    // end time of kernel
-    auto end_kernel = std::chrono::high_resolution_clock::now();
-    uint32_t duration_kernel = std::chrono::duration_cast<std::chrono::seconds>(end_kernel - start_kernel).count();
-    // std::cout << "Kernel time: " << (float)duration_kernel_ms / 1000 << " s" << std::endl;
-    std::cout << "Kernel time: " << duration_kernel << " s" << std::endl;
-#endif
 
 #ifdef DISTRIBUTION
     // create a histogram for the blockSums
@@ -1485,7 +1485,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     // initialize random states
     CUDACHECK(cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t)));
     CUDACHECK(cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t)));
-    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state); 
+    cuda_device_init_metric<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state, input_seed); 
     CUDACHECK(cudaGetLastError());   
     CUDACHECK(cudaDeviceSynchronize());
     cudaFree(rnd_state_tmp);
@@ -1496,7 +1496,15 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     // check for errors
     CUDACHECK(cudaDeviceSynchronize());
 
-    // Sum the block sums
+#ifdef COUNT_TIME
+    // end time of kernel
+    auto end_kernel = std::chrono::high_resolution_clock::now();
+    uint32_t duration_kernel = std::chrono::duration_cast<std::chrono::seconds>(end_kernel - start_kernel).count();
+    // std::cout << "Kernel time: " << (float)duration_kernel_ms / 1000 << " s" << std::endl;
+    std::cout << "Kernel time: " << duration_kernel << " s" << std::endl;
+#endif
+
+   // Sum the block sums
     double total_std_dev = 0;
     #pragma openmp parallel for reduction(+:total_std_dev)
     for (int i = 0; i < block_nbr; i++) {
@@ -1653,6 +1661,8 @@ void cuda_all_pair_path_stress(const odgi::graph_t &graph, odgi::algorithms::lay
     // print some info for the graph
     std::cout << "node_count: " << node_count << ", path_count: " << path_count << ", total_path_steps: " << path_data.total_path_steps << std::endl;
 
+    std::cout << "Preprocessing Done..." << std::endl;
+
     // count the total number of step-pairs within each path
     // For each path, there are (N = path_data.paths[path_idx].step_count) steps; there are N*(N-1)/2 step-pairs
     uint64_t total_term_count = 0;
@@ -1679,6 +1689,10 @@ void cuda_all_pair_path_stress(const odgi::graph_t &graph, odgi::algorithms::lay
     cudaMallocManaged(&ignrSums, block_nbr * sizeof(int));
 
     int sharedMemSize = block_size * sizeof(double);
+#ifdef COUNT_TIME
+    // Clock: start time of kernel
+    auto start_kernel = std::chrono::high_resolution_clock::now();
+#endif
     // kernel: compute the all-pair path stress
     compute_all_path_stress<<<block_nbr, block_size, sharedMemSize>>>(node_data, path_data, path_data.total_path_steps, blockSums, ignrSums);
     cudaDeviceSynchronize();
@@ -1687,7 +1701,12 @@ void cuda_all_pair_path_stress(const odgi::graph_t &graph, odgi::algorithms::lay
     if (error != cudaSuccess) {
         std::cerr << "CUDA error: " << cudaGetErrorName(error) << ": " << cudaGetErrorString(error) << std::endl;
     }
-
+#ifdef COUNT_TIME
+    // Clock: end time of kernel
+    auto end_kernel = std::chrono::high_resolution_clock::now();
+    uint32_t duration_kernel = std::chrono::duration_cast<std::chrono::seconds>(end_kernel - start_kernel).count();
+    std::cout << "Kernel time: " << duration_kernel << " s" << std::endl;
+#endif
     // Sum the block sums
     double total_path_stress = 0;
     #pragma openmp parallel for reduction(+:total_path_stress)
