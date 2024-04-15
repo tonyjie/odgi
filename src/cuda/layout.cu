@@ -870,7 +870,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaDeviceProp prop;
     CUDACHECK(cudaGetDeviceProperties(&prop, 0));
     int sm_count = prop.multiProcessorCount;
-    std::cout << "SM count: " << sm_count << std::endl;
+    // std::cout << "SM count: " << sm_count << std::endl;
 
 
     // create eta array
@@ -1118,7 +1118,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
-    std::cout << "=====================" << std::endl;
+    std::cout << "===== Run Time Result =====" << std::endl;
     std::cout << "Kernel run time: " << duration_compute_ms << "ms" << std::endl;
 
 
@@ -1156,7 +1156,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 #ifdef cuda_layout_profiling
     auto end = std::chrono::high_resolution_clock::now();
     uint32_t duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "Kernel + Pre/Post Processing: " << duration_ms << "ms" << std::endl;
+    // std::cout << "Kernel + Pre/Post Processing: " << duration_ms << "ms" << std::endl;
 #endif
 
     return;

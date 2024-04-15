@@ -8,7 +8,7 @@
 // #define LOG_STRESS
 // for geometric mean of each term's stress. 
 
-#define COUNT_TIME
+// #define COUNT_TIME
 // #define DEBUG
 // #define DEBUG_CHR16
 // #define DEBUG_BLOCK
@@ -17,7 +17,7 @@
 
 // #define RANDOM_SEED
 
-#define PRINT_INFO
+// #define PRINT_INFO
 
 #define STDDEV
 
@@ -989,7 +989,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     int sm_count = prop.multiProcessorCount;
-    std::cout << "SM count: " << sm_count << std::endl;
+    // std::cout << "SM count: " << sm_count << std::endl;
 
 #ifdef COUNT_TIME
     // start time
@@ -1316,7 +1316,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     const uint32_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (total_term_count + block_size - 1) / block_size;
 
-    std::cout << "total_term_count: " << total_term_count << ", block_nbr: " << block_nbr << ", block_size: " << block_size << std::endl;
+    // std::cout << "total_term_count: " << total_term_count << ", block_nbr: " << block_nbr << ", block_size: " << block_size << std::endl;
 
     // initialize random states
     curandState_t *rnd_state_tmp;
@@ -1475,7 +1475,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     total_path_stress = exp(total_path_stress);
 #endif
     std::cout << "path_stress: " << total_path_stress << std::endl;
-    std::cout << "total_ignr_count: " << total_ignr_count << std::endl;
+    // std::cout << "total_ignr_count: " << total_ignr_count << std::endl;
 
 #ifdef STDDEV
     double mean_stress = total_path_stress;
@@ -1532,7 +1532,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     double stddev = std::sqrt(total_std_dev / (total_term_count - total_ignr_count));
 
     std::cout << "stddev: " << stddev << std::endl;
-    std::cout << "ignr_count: " << total_ignr_count << std::endl;
+    // std::cout << "ignr_count: " << total_ignr_count << std::endl;
 
     // 95% confidence interval
     double stddev_div_sqrtn = stddev / std::sqrt(total_term_count - total_ignr_count);
@@ -1540,7 +1540,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     double conf_interval_low = mean_stress - conf_interval;
     double conf_interval_high = mean_stress + conf_interval;
 
-    std::cout << "conf interval: " << conf_interval << std::endl;
+    // std::cout << "conf interval: " << conf_interval << std::endl;
     std::cout << "95% confidence interval: [" << conf_interval_low << ", " << conf_interval_high << "]" << std::endl;
 
 #endif
@@ -1673,13 +1673,13 @@ void cuda_all_pair_path_stress(const odgi::graph_t &graph, odgi::algorithms::lay
     }
     // there are 4 cases for each step-pair
     total_term_count *= 4;
-    std::cout << "total_term_count: " << total_term_count << std::endl;
+    // std::cout << "total_term_count: " << total_term_count << std::endl;
 
 
     // map each thread withi one step "s". For that thread, it compute the stress of all step-pairs (s, t) where t > s, within that path
     const uint32_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (path_data.total_path_steps + block_size - 1) / block_size;
-    std::cout << "block_nbr: " << block_nbr << ", block_size: " << block_size << std::endl;
+    // std::cout << "block_nbr: " << block_nbr << ", block_size: " << block_size << std::endl;
 
     // blockSums: partial sum for each block
     double *blockSums;
