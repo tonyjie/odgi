@@ -407,6 +407,8 @@ namespace odgi {
 
                         };
 
+                auto start_compute = std::chrono::high_resolution_clock::now();
+
                 std::thread checker(checker_lambda);
                 std::thread snapshot_thread(snapshot_lambda);
 
@@ -423,6 +425,11 @@ namespace odgi {
                 snapshot_thread.join();
 
                 checker.join();
+
+                auto end_compute = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> compute_time = end_compute - start_compute;
+                std::cout << "===== CPU Run Time Results =====" << std::endl;
+                std::cout << "Kernel Run Time: " << compute_time.count() << "s" << std::endl;
             }
 
             if (progress) {
