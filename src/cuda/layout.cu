@@ -1117,9 +1117,11 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cpu_layout(config, etas, zetas, node_data, path_data);
 #endif
     auto end_compute = std::chrono::high_resolution_clock::now();
-    uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
+    // uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
+    uint32_t duration_compute_s = std::chrono::duration_cast<std::chrono::seconds>(end_compute - start_compute).count();
     std::cout << "===== Run Time Result =====" << std::endl;
-    std::cout << "Kernel run time: " << duration_compute_ms << "ms" << std::endl;
+    // std::cout << "Kernel run time: " << duration_compute_ms << "ms" << std::endl;
+    std::cout << "Kernel run time: " << duration_compute_s << "s" << std::endl;
 
 
 
