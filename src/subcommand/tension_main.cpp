@@ -519,7 +519,7 @@ int main_tension(int argc, char **argv) {
     // The number of sampling pairs is controlled by "SAMPLE_FACTOR". 
     if (path_stress) {
         cout << "compute the sampled path-stress using GPU" << endl;
-        cuda::cuda_sampled_path_stress(graph, layout, nthreads);
+        cuda::gpu_sampled_path_stress(graph, layout, nthreads);
     }
 
     // ===== 7. Check the All-pair Path-Stress using GPU =====

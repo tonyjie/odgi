@@ -71,7 +71,7 @@ typedef struct curandStateXORWOWCoalesced_t curandStateCoalesced_t;
 
 void cuda_node_crossing(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout);
 
-void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout, int nthreads);
+void gpu_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout, int nthreads);
 
 void cuda_all_pair_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout, int nthreads);
 
