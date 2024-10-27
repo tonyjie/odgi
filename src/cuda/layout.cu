@@ -124,7 +124,7 @@ static __device__ __inline__ uint32_t __mysmid(){
 
 /**
 * @brief: update the coordinates of two visualization nodes in the 2D layout space
-* This function is called multiple times in one `cuda_device_layout` in order to increase the data reuse. 
+* This function is called multiple times in one `gpu_layout_kernel` in order to increase the data reuse. 
 * Each time, the warp shuffle intrinsics are used to change the selection of node 2 among the 32 threads in the warp. 
 * E.g. Iter : Step Pairs Selected would be: 
 *     1: (a0, b0), (a1, b1), (a2, b2), ..., (a31, b31)
@@ -415,7 +415,7 @@ __global__ void cuda_device_layout_zipf_dist(int iter, cuda::layout_config_t con
 
     // Data Reuse for the non-cooling iteration
     if (!cooling[threadIdx.x / WARP_SIZE]) {
-        // Shuffle and Update (DATA_REUSE_TIMES = UPDATE_TIMES - 1) times (UPDATE_TIMES is the total update times when calling `cuda_device_layout` once)
+        // Shuffle and Update (DATA_REUSE_TIMES = UPDATE_TIMES - 1) times (UPDATE_TIMES is the total update times when calling `gpu_layout_kernel` once)
         for (int i = 0; i < UPDATE_TIMES - 1; i++) {
             // Shuffle the step data within a warp
             int shuffle_laneId = curand_coalesced(thread_rnd_state, threadIdx.x) % WARP_SIZE;
@@ -439,7 +439,8 @@ __global__ void cuda_device_layout_zipf_dist(int iter, cuda::layout_config_t con
 }
 #endif
 
-__global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, 
+__global__ 
+void gpu_layout_kernel(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, 
                                    cuda::node_data_t node_data, cuda::path_data_t path_data, int sm_count) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
@@ -451,9 +452,8 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     curandStateCoalesced_t *thread_rnd_state = &rnd_state[smid];
 
-    __shared__ bool cooling[BLOCK_SIZE / WARP_SIZE]; // This [32] is actually BLOCK_SIZE/WARP_SIZE = 1024/32 = 32. Not good to hardcode. 
+    __shared__ bool cooling[BLOCK_SIZE / WARP_SIZE]; 
     if (threadIdx.x % WARP_SIZE == 1) {
-        // cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5);
         cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0);
     }
 
@@ -483,7 +483,6 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(p.step_count > 1);
 
     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    // uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
     uint32_t s1_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % p.step_count;
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
@@ -491,7 +490,6 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     if (cooling[threadIdx.x / WARP_SIZE]) {
         bool backward;
         uint32_t jump_space;
-        // if (s1_idx > 0 && (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5) || s1_idx == p.step_count-1) {
         if (s1_idx > 0 && (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) || s1_idx == p.step_count-1) {
             // go backward
             backward = true;
@@ -508,23 +506,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
         uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
 
-        /*
-        if (backward) {
-            if (!(z_i <= s1_idx)) {
-                printf("Error (thread %i): %u - %u\n", threadIdx.x, s1_idx, z_i);
-                printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, zetas[space]);
-            }
-            assert(z_i <= s1_idx);
-        } else {
-            if (!(z_i <= p.step_count - s1_idx - 1)) {
-                printf("Error (thread %i): %u + %u, step_count %u\n", threadIdx.x, s1_idx, z_i, p.step_count);
-                printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, zetas[space]);
-            }
-            assert(s1_idx + z_i < p.step_count);
-        }
-        */
-
-        s2_idx = backward? s1_idx - z_i: s1_idx + z_i;
+        s2_idx = backward ? s1_idx - z_i : s1_idx + z_i;
     } else {
         do {
             // s2_idx = uint32_t(floor((1.0 - curand_uniform_coalesced(thread_rnd_state, threadIdx.x)) * float(p.step_count)));
@@ -547,8 +529,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     n2_pos_in_path = std::abs(n2_pos_in_path);
 
     uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
-    // bool n1_use_other_end = (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5)? true: false;
-    bool n1_use_other_end = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0)? true: false;
+    bool n1_use_other_end = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) ? true : false;
     if (n1_use_other_end) {
         n1_pos_in_path += uint64_t{n1_seq_length};
         n1_use_other_end = !n1_is_rev;
@@ -557,8 +538,7 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
 
     uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
-    // bool n2_use_other_end = (curand_uniform_coalesced(thread_rnd_state, threadIdx.x) <= 0.5)? true: false;
-    bool n2_use_other_end = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0)? true: false;
+    bool n2_use_other_end = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) ? true : false;
     if (n2_use_other_end) {
         n2_pos_in_path += uint64_t{n2_seq_length};
         n2_use_other_end = !n2_is_rev;
@@ -574,13 +554,12 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
                    n2_pos_in_path, n2_id, n2_offset, 
                    eta, node_data);
 
-// #define UPDATE_TIMES 2
     uint64_t UPDATE_TIMES = config.gpu_data_reuse_factor;
 
     // Data Reuse for the non-cooling iteration
     // if (!cooling[threadIdx.x / WARP_SIZE]) {
 
-    // Shuffle and Update (DATA_REUSE_TIMES = UPDATE_TIMES - 1) times (UPDATE_TIMES is the total update times when calling `cuda_device_layout` once)
+    // Shuffle and Update (DATA_REUSE_TIMES = UPDATE_TIMES - 1) times (UPDATE_TIMES is the total update times when calling `gpu_layout_kernel` once)
     for (int i = 0; i < UPDATE_TIMES - 1; i++) {
         // Shuffle the step data within a warp
         int shuffle_laneId = curand_coalesced(thread_rnd_state, threadIdx.x) % WARP_SIZE;
@@ -845,13 +824,12 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 }
 
 
-void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
+void gpu_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
 
 #ifdef cuda_layout_profiling
     auto start = std::chrono::high_resolution_clock::now();
 #endif
 
-// #define STEP_DECREASE_FACTOR 1.75
     double STEP_DECREASE_FACTOR = config.gpu_step_decrease_factor;
 
 #ifdef PRINT_INFO
@@ -870,8 +848,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaDeviceProp prop;
     CUDACHECK(cudaGetDeviceProperties(&prop, 0));
     int sm_count = prop.multiProcessorCount;
-    // std::cout << "SM count: " << sm_count << std::endl;
-
 
     // create eta array
     double *etas;
@@ -888,7 +864,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         double eta = eta_max * exp(-lambda * (std::abs(i - iter_with_max_learning_rate)));
         etas[i] = isnan(eta)? eta_min : eta;
     }
-
 
     // create node data structure
     // consisting of sequence length and coords
@@ -987,7 +962,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         }
     }
 
-
     // cache zipf zetas
     auto start_zeta = std::chrono::high_resolution_clock::now();
     double *zetas;
@@ -1039,75 +1013,8 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     CUDACHECK(cudaDeviceSynchronize());
     cudaFree(rnd_state_tmp);
 
-#ifdef DEBUG_ZIPF
-    // Here we just use DRB1-3123 to evaluate right now. 
-    // create a histogram for each path. For each histogram, we compute the "zipf distance", and put it into the histogram. 
-    // For each histogram, the region includes: <-1000; -1000~-100; -100~-10; -10~-1; -1~0; 0~1; 1~10; 10~100; 100~1000; >1000
-
-    // More regions: <-1000; -1000~-100; -100~-10; -10; -9; -8; -7; -6; -5; -4; -3; -2; -1; 0; 1; 2; 3; 4; 5; 6; 7; 8; 9; 10; 10~100; 100~1000; >1000
-
-    // More regions: each value would just one bin. Fine-grained. From -5000, -4999, ..., -1, 1, 2, ..., 5000
-
-    std::cout << "Before initialization..." << std::endl;
-    // int num_regions = 10;
-    // int num_regions = 27;
-    int num_regions = 10000;
-
-    // cudaMallocManaged
-    unsigned long long int **hist_zipf; 
-    CUDACHECK(cudaMallocManaged(&hist_zipf, path_count * sizeof(unsigned long long int *)));
-    for (int i = 0; i < path_count; i++) {
-        // cudaMallocManaged
-        CUDACHECK(cudaMallocManaged(&hist_zipf[i], num_regions * sizeof(unsigned long long int)));
-        for (int j = 0; j < num_regions; j++) {
-            hist_zipf[i][j] = 0;
-        }
-    }
-    
-    std::cout << "Finished initialization..." << std::endl;
-
-    // call the kernel function
     for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout_zipf_dist<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count, hist_zipf);
-        // check error
-        CUDACHECK(cudaGetLastError());
-        CUDACHECK(cudaDeviceSynchronize());
-    }
-
-    // print out the historgram
-    std::cout << "===== [Distribution] Histogram for zipf distribution =====" << std::endl;
-    // print out the regions in format
-    // string regions[num_regions] = {"<-1000", "-1000~-100", "-100~-10", "-10~-1", "-1~0", "0~1", "1~10", "10~100", "100~1000", ">1000"};
-    // string regions[num_regions] = {"<-1000", "-1000~-100", "-100~-10", "-10", "-9", "-8", "-7", "-6", "-5", "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "10~100", "100~1000", ">1000"};
-    // std::cout << "Regions: ";
-    // for (int i = 0; i < num_regions; i++) {
-    //     std::cout << std::setw(10) << regions[i];
-    // }
-
-    std::cout << "Regions: ";
-    std::cout << "From -5000 to 5000. Each value is a bin. Fine-grained. Total 10000 bins. ";
-    std::cout << std::endl;
-    // print in format. Align the value for each region. 
-    for (int i = 0; i < path_count; i++) {
-        std::cout << "Path " << i << ": ";
-        for (int j = 0; j < num_regions; j++) {
-            std::cout << std::setw(10) << hist_zipf[i][j];
-        }
-        std::cout << std::endl;
-    }
-
-    // Free
-    for (int i = 0; i < path_count; i++) {
-        cudaFree(hist_zipf[i]);
-    }
-    cudaFree(hist_zipf);
-
-
-
-#endif
-
-    for (int iter = 0; iter < config.iter_max; iter++) {
-        cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
+        gpu_layout_kernel<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
         // check error
         CUDACHECK(cudaGetLastError());
         CUDACHECK(cudaDeviceSynchronize());
@@ -1120,7 +1027,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
     uint32_t duration_compute_s = std::chrono::duration_cast<std::chrono::seconds>(end_compute - start_compute).count();
     std::cout << "===== Run Time Result =====" << std::endl;
-    // std::cout << "Kernel run time: " << duration_compute_ms << "ms" << std::endl;
     std::cout << "Kernel run time: " << duration_compute_s << "s" << std::endl;
 
 

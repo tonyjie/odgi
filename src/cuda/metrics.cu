@@ -644,7 +644,7 @@ void compute_sampled_stress_stddev(cuda::node_data_t node_data, cuda::path_data_
 * CUDA kernel to compute the sampled path stress
 */
 __global__
-void compute_sampled_path_stress(cuda::node_data_t node_data, cuda::path_data_t path_data, uint64_t total_term_count, curandStateCoalesced_t *rnd_state, double *blockSums, int *ignr_sums) {
+void gpu_sampled_path_stress_kernel(cuda::node_data_t node_data, cuda::path_data_t path_data, uint64_t total_term_count, curandStateCoalesced_t *rnd_state, double *blockSums, int *ignr_sums) {
     uint64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     double stress = 0; // each threaed counts the stress of a node-pair
     int ignr_count = 0; // count the number of node-pairs that are directly connected
@@ -982,7 +982,7 @@ void compute_all_path_stress(cuda::node_data_t node_data, cuda::path_data_t path
 /*
 * CUDA host function to compute the SAMPLED path stress: layout_node pairs within each path, and sums up. 
 */
-void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout, int nthreads) {
+void gpu_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layout::Layout &layout, int nthreads) {
     printf("CUDA kernel to compute sampled path stress\n");
 
     // get cuda device property, and get the SM count
@@ -1387,7 +1387,7 @@ void cuda_sampled_path_stress(const odgi::graph_t &graph, odgi::algorithms::layo
     cudaFree(hist_stress);
 #else
     // compute the sampled path stress
-    compute_sampled_path_stress<<<block_nbr, block_size, sharedMemSize>>>(node_data, path_data, total_term_count, rnd_state, blockSums, ignrSums);
+    gpu_sampled_path_stress_kernel<<<block_nbr, block_size, sharedMemSize>>>(node_data, path_data, total_term_count, rnd_state, blockSums, ignrSums);
     CUDACHECK(cudaGetLastError());
     // check for errors
     CUDACHECK(cudaDeviceSynchronize());

@@ -477,7 +477,7 @@ namespace odgi {
             config.gpu_data_reuse_factor = gpu_data_reuse_factor;
             config.gpu_step_decrease_factor = gpu_step_decrease_factor;
 
-            cuda::cuda_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y);
+            cuda::gpu_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y);
             return;
         }
 
