@@ -41,8 +41,14 @@ odgi/bin/odgi layout -i ${INPUT_OG} -o ${OUTPUT_LAY} --threads ${NUM_THREAD} --g
 
 ## Performance
 
-# Run time and speedup --- the run time format is in h:mm:ss
-# Run time and Speedup --- the run time format is in h:mm:ss
+Datasets: [HPRC](https://humanpangenome.org/data/), its [Github](https://github.com/human-pangenomics/HPP_Year1_Assemblies)
+
+Machines: 
+- 32-thread CPU baseline: 32-core Intel Xeon Gold 6246R CPU@3.4GHz. 
+- A6000: NVIDIA RTX A6000 GPU. 
+- A100: NVIDIA A100 GPU. 
+
+Run time and speedup — the run time format is in h:mm:ss. 
 
 | Chromosome | CPU      | A6000   | Speedup (A6000) | A100    | Speedup (A100) |
 |------------|----------|---------|----------------|---------|----------------|
