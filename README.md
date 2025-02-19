@@ -8,6 +8,8 @@ We build upon the widely-used pangenome tools [ODGI](https://github.com/pangenom
 
 
 ## Installation
+Update: now the GPU-supported build is also integrated into the [ODGI](https://github.com/pangenome/odgi?tab=readme-ov-file#installation). You can follow the ODGI's installation guide to try GPU-accelerated layout easily! 
+
 For CPU-only build, you can follow the installation guide in [ODGI](https://github.com/pangenome/odgi?tab=readme-ov-file#installation). 
 
 Our requirements are the same: 
@@ -87,6 +89,18 @@ To reproduce the experiments in the paper, the easiet way is to follow our provi
 
 
 ## Paper
-**Rapid GPU-Based Pangenome Graph Layout**: https://arxiv.org/abs/2409.00876
+**Rapid GPU-Based Pangenome Graph Layout**: https://ieeexplore.ieee.org/abstract/document/10793207
 
-To be presented at [SC'24](https://sc24.supercomputing.org/). 
+Presented at [SC'24](https://sc24.supercomputing.org/). 
+
+## Cite
+```
+@inproceedings{li2024rapid,
+  title={Rapid GPU-Based Pangenome Graph Layout},
+  author={Li, Jiajie and Schmelzle, Jan-Niklas and Du, Yixiao and Heumos, Simon and Guarracino, Andrea and Guidi, Giulia and Prins, Pjotr and Garrison, Erik and Zhang, Zhiru},
+  booktitle={SC24: International Conference for High Performance Computing, Networking, Storage and Analysis},
+  pages={1--19},
+  year={2024},
+  organization={IEEE}
+}
+```
