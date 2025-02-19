@@ -91,7 +91,7 @@ To reproduce the experiments in the paper, the easiet way is to follow our provi
 ## Paper
 **Rapid GPU-Based Pangenome Graph Layout**: https://ieeexplore.ieee.org/abstract/document/10793207
 
-Presented at [SC'24](https://sc24.supercomputing.org/). 
+Presented at [SC'24](https://sc24.conference-program.com/presentation/?id=pap443&sess=sess382). 
 
 ## Cite
 ```
