@@ -78,14 +78,11 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     curandState *thread_rnd_state = &rnd_state[smid * 1024 + threadIdx.x];
 
     // select path
-    // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    // uint32_t step_idx = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(path_data.total_path_steps)));
     uint32_t step_idx = curand(thread_rnd_state) % path_data.total_path_steps;
     assert(step_idx < path_data.total_path_steps);
 
     // find path of step of specific thread with LUT (threads in warp pick same path)
     uint32_t path_idx = path_data.element_array[step_idx].pidx;
-
 
     path_t p = path_data.paths[path_idx];
     if (p.step_count < 2) {
@@ -94,15 +91,12 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     assert(p.step_count > 1);
 
     // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    // uint32_t s1_idx = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(p.step_count)));
     uint32_t s1_idx = curand(thread_rnd_state) % p.step_count;
     assert(s1_idx < p.step_count);
     uint32_t s2_idx;
 
-    // bool cooling = (iter >= config.first_cooling_iteration) || (curand_uniform(thread_rnd_state) <= 0.5);
     bool cooling = (iter >= config.first_cooling_iteration) || (curand(thread_rnd_state) % 2 == 0);
     if (cooling) {
-        // if (s1_idx > 0 && (curand_uniform(thread_rnd_state) <= 0.5) || s1_idx == p.step_count-1) {
         if (s1_idx > 0 && (curand(thread_rnd_state) % 2 == 0) || s1_idx == p.step_count-1) {
             // go backward
             uint32_t jump_space = min(config.space, s1_idx);
@@ -136,7 +130,6 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
         }
     } else {
         do {
-            // s2_idx = uint32_t(floor((1.0 - curand_uniform(thread_rnd_state)) * float(p.step_count)));
             s2_idx = curand(thread_rnd_state) % p.step_count;
         } while (s1_idx == s2_idx);
     }
@@ -156,7 +149,6 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     n2_pos_in_path = std::abs(n2_pos_in_path);
 
     uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
-    // bool n1_use_other_end = (curand_uniform(thread_rnd_state) <= 0.5)? true: false;
     bool n1_use_other_end = (curand(thread_rnd_state) % 2 == 0) ? true: false;
     if (n1_use_other_end) {
         n1_pos_in_path += uint64_t{n1_seq_length};
@@ -166,7 +158,6 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
     }
 
     uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
-    // bool n2_use_other_end = (curand_uniform(thread_rnd_state) <= 0.5)? true: false;
     bool n2_use_other_end = (curand(thread_rnd_state) % 2 == 0) ? true: false;
     if (n2_use_other_end) {
         n2_pos_in_path += uint64_t{n2_seq_length};
@@ -211,7 +202,6 @@ __global__ void cuda_device_layout(int iter, cuda::layout_config_t config, curan
 
     double mag = sqrt(dx * dx + dy * dy);
     double delta = mu * (mag - d_ij) / 2.0;
-    //double delta_abs = std::abs(delta);
 
     double r = delta / mag;
     double r_x = r * dx;
@@ -464,25 +454,10 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 
 
 void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
-
-#ifdef cuda_layout_profiling
-    auto start = std::chrono::high_resolution_clock::now();
-#endif
-
-#ifdef PRINT_INFO
-    std::cout << "Hello world from CUDA host" << std::endl;
-    std::cout << "iter_max: " << config.iter_max << std::endl;
-    std::cout << "first_cooling_iteration: " << config.first_cooling_iteration << std::endl;
-    std::cout << "min_term_updates: " << config.min_term_updates << std::endl;
-    std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
-    std::cout << "theta: " << config.theta << std::endl;
-#endif
-
     // get cuda device property, and get the SM count
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     int sm_count = prop.multiProcessorCount;
-    std::cout << "SM count: " << sm_count << std::endl;
 
     // create eta array
     double *etas;
@@ -504,7 +479,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     // create node data structure
     // consisting of sequence length and coords
     uint32_t node_count = graph.get_node_count();
-    std::cout << "node_count: " << node_count << std::endl;
     assert(graph.min_node_id() == 1);
     assert(graph.max_node_id() == node_count);
     assert(graph.max_node_id() - graph.min_node_id() + 1 == node_count);
@@ -601,12 +575,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto start_zeta = std::chrono::high_resolution_clock::now();
     double *zetas;
     uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
-#ifdef PRINT_INFO    
-    std::cout << "zetas_cnt: " << zetas_cnt << std::endl;
-    std::cout << "space_max: " << config.space_max << std::endl;
-    std::cout << "config.space: " << config.space << std::endl;
-    std::cout << "config.space_quantization: " << config.space_quantization_step << std::endl;
-#endif
+
 
     cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
     double zeta_tmp = 0.0;
@@ -619,16 +588,10 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             zetas[config.space_max + 1 + (i - config.space_max) / config.space_quantization_step] = zeta_tmp;
         }
     }
-    auto end_zeta = std::chrono::high_resolution_clock::now();
-    uint32_t duration_zeta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_zeta - start_zeta).count();
-    std::cout << "Zeta precompute took " << duration_zeta_ms << "ms" << std::endl;
 
-
-    auto start_compute = std::chrono::high_resolution_clock::now();
 #define USE_GPU
 #ifdef USE_GPU
     std::cout << "cuda gpu layout" << std::endl;
-    std::cout << "total-path_steps: " << path_data.total_path_steps << std::endl;
 
     const uint64_t block_size = BLOCK_SIZE;
     uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size;
@@ -639,18 +602,25 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     CUDACHECK(cudaGetLastError());
     CUDACHECK(cudaDeviceSynchronize());
 
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
     for (int iter = 0; iter < config.iter_max; iter++) {
         cuda_device_layout<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
-        CUDACHECK(cudaGetLastError());
-        CUDACHECK(cudaDeviceSynchronize());
     }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    std::cout << "Total CUDA kernel time: " << milliseconds << " ms" << std::endl;   
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop); 
 
 #else
     cpu_layout(config, etas, zetas, node_data, path_data);
 #endif
-    auto end_compute = std::chrono::high_resolution_clock::now();
-    uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
-    std::cout << "CUDA layout compute took " << duration_compute_ms << "ms" << std::endl;
 
 
 
@@ -683,12 +653,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     cudaFree(rnd_state);
 #endif
 
-
-#ifdef cuda_layout_profiling
-    auto end = std::chrono::high_resolution_clock::now();
-    uint32_t duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << "CUDA layout took " << duration_ms << "ms" << std::endl;
-#endif
 
     return;
 }
