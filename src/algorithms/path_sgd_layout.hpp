@@ -19,9 +19,12 @@
 #include "dirty_zipfian_int_distribution.h"
 #include "XoshiroCpp.hpp"
 #include "progress.hpp"
-#ifdef USE_GPU
-#include "cuda/layout.h"
-#endif
+// #ifdef USE_GPU
+// #include "cuda/layout.h"
+// #endif
+
+// #include "cuda/layout.h"
+#include "cuda/layout.cuh"
 
 namespace odgi {
     namespace algorithms {

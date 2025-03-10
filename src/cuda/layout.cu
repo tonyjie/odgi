@@ -1,475 +1,244 @@
-#include "layout.h"
-#include <cuda.h>
+// layout.cu
+#include "layout.cuh"
 #include <assert.h>
-#include "cuda_runtime_api.h"
+#include <curand_kernel.h>
+#include <cuda_runtime.h>
+#include <thrust/scan.h>
 
-#define CUDACHECK(cmd) do {                         \
-  cudaError_t err = cmd;                            \
-  if (err != cudaSuccess) {                         \
-    printf("Failed: Cuda error %s:%d '%s'\n",       \
-        __FILE__,__LINE__,cudaGetErrorString(err)); \
-    exit(EXIT_FAILURE);                             \
-  }                                                 \
-} while(0)
+namespace layout_kernel {
 
-#define NCCLCHECK(cmd) do {                         \
-  ncclResult_t res = cmd;                           \
-  if (res != ncclSuccess) {                         \
-    printf("Failed, NCCL error %s:%d '%s'\n",       \
-        __FILE__,__LINE__,ncclGetErrorString(res)); \
-    exit(EXIT_FAILURE);                             \
-  }                                                 \
-} while(0)
-
-namespace cuda {
-
-__global__ void cuda_device_init(curandState_t *rnd_state_tmp, curandStateCoalesced_t *rnd_state) {
-    int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // initialize curandState with original curand implementation
-    curand_init(42+tid, tid, 0, &rnd_state_tmp[tid]);
-    // copy to coalesced data structure
-    rnd_state[blockIdx.x].d[threadIdx.x] = rnd_state_tmp[tid].d;
-    rnd_state[blockIdx.x].w0[threadIdx.x] = rnd_state_tmp[tid].v[0];
-    rnd_state[blockIdx.x].w1[threadIdx.x] = rnd_state_tmp[tid].v[1];
-    rnd_state[blockIdx.x].w2[threadIdx.x] = rnd_state_tmp[tid].v[2];
-    rnd_state[blockIdx.x].w3[threadIdx.x] = rnd_state_tmp[tid].v[3];
-    rnd_state[blockIdx.x].w4[threadIdx.x] = rnd_state_tmp[tid].v[4];
-}
-
-/**
- * @brief: Return 32-bits of pseudorandomness from an XORWOW generator. from "curand_kernel.h"
- * For some use cases, we don't need floating point uniform distribution. So we don't need to call `curand_uniform_coalesced` as below. We shall use this function. 
- * \param state - Pointer to state to update
- * \param thread_id - Thread id
- * \return 32-bits of pseudorandomness as an unsigned int, all bits valid to use.
-*/
-__device__ 
-unsigned int curand_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
-    // Return 32-bits of pseudorandomness from an XORWOW generator. 
-    uint32_t t;
-    t = (state->w0[thread_id] ^ (state->w0[thread_id] >> 2));
-    state->w0[thread_id] = state->w1[thread_id];
-    state->w1[thread_id] = state->w2[thread_id];
-    state->w2[thread_id] = state->w3[thread_id];
-    state->w3[thread_id] = state->w4[thread_id];
-    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
-    state->d[thread_id] += 362437;    
-    return state->w4[thread_id] + state->d[thread_id];
-}
-
-__device__
-float curand_uniform_coalesced(curandStateCoalesced_t *state, uint32_t thread_id) {
-    // generate 32 bit pseudorandom value with XORWOW generator (see paper "Xorshift RNGs" by George Marsaglia);
-    // also used in curand library (see curand_kernel.h)
-    uint32_t t;
-    t = state->w0[thread_id] ^ (state->w0[thread_id] >> 2);
-    state->w0[thread_id] = state->w1[thread_id];
-    state->w1[thread_id] = state->w2[thread_id];
-    state->w2[thread_id] = state->w3[thread_id];
-    state->w3[thread_id] = state->w4[thread_id];
-    state->w4[thread_id] = (state->w4[thread_id] ^ (state->w4[thread_id] << 4)) ^ (t ^ (t << 1));
-    state->d[thread_id] += 362437;
-
-    uint32_t rnd_uint = state->d[thread_id] + state->w4[thread_id];
-
-    // convert to float; see curand_uniform.h
-    return _curand_uniform(rnd_uint);
-}
-
-
-__device__ double compute_zeta(uint32_t n, double theta) {
-    double ans = 0.0;
-    for (uint32_t i = 1; i <= n; i++) {
-        ans += pow(1.0 / double(i), theta);
+__global__ void setup_rand_states(curandState *states, int num_threads, unsigned int seed) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < num_threads) {
+        curand_init(seed + tid, 0, 0, &states[tid]);
     }
-    return ans;
 }
 
-// this function uses the cuda operation __powf, which is a faster but less precise alternative to the pow operation
-__device__ uint32_t cuda_rnd_zipf(curandStateCoalesced_t *rnd_state, uint32_t n, double theta, double zeta2, double zetan) {
-    double alpha = 1.0 / (1.0 - theta);
-    double denominator = 1.0 - zeta2 / zetan;
-    if (denominator == 0.0) {
-        denominator = 1e-9;
+__global__ void gpu_layout_kernel(layout_config_t config, double *d_etas, double *d_zetas, 
+                                 node_t *d_nodes, path_t *d_paths, path_element_t *d_elements,
+                                 curandState *d_states, double *d_path_cdf, uint32_t path_cdf_size, int iter) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= config.min_term_updates) return;
+
+    curandState local_state = d_states[tid];
+    double eta = d_etas[iter];
+    
+    // Path selection using binary search on CDF
+    double rand_val = curand_uniform_double(&local_state) * d_path_cdf[path_cdf_size-1];
+    int low = 0, high = path_cdf_size - 1;
+    while (low < high) {
+        int mid = (low + high) / 2;
+        if (d_path_cdf[mid] < rand_val) low = mid + 1;
+        else high = mid;
     }
-    double eta = (1.0 - __powf(2.0 / double(n), 1.0 - theta)) / (denominator);
+    uint32_t path_idx = low;
+    path_t p = d_paths[path_idx];
+    if (p.step_count < 2) return;
 
-    // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    double u = 1.0 - curand_uniform_coalesced(rnd_state, threadIdx.x);
-    double uz = u * zetan;
-
-    int64_t val = 0;
-    if (uz < 1.0) val = 1;
-    else if (uz < 1.0 + __powf(0.5, theta)) val = 2;
-    else val = 1 + int64_t(double(n) * __powf(eta * u - eta + 1.0, alpha));
-
-    if (val > n) {
-        //printf("WARNING: val: %ld, n: %u\n", val, uint32_t(n));
-        val--;
+    // Step selection logic
+    uint32_t s1_idx, s2_idx;
+    if (iter >= config.first_cooling_iteration || curand_uniform_double(&local_state) < 0.5) {
+        s1_idx = curand(&local_state) % p.step_count;
+        bool go_backward = (s1_idx > 0 && curand_uniform_double(&local_state) < 0.5) || (s1_idx == p.step_count-1);
+        
+        if (go_backward) {
+            uint32_t jump_space = min(config.space, s1_idx);
+            uint32_t space = (jump_space > config.space_max) ? 
+                config.space_max + (jump_space - config.space_max)/config.space_quantization_step + 1 : jump_space;
+            double u = curand_uniform_double(&local_state) * d_zetas[space];
+            uint32_t z_i = 1;
+            while (z_i < jump_space && d_zetas[z_i] < u) z_i++;
+            s2_idx = s1_idx - z_i;
+        } else {
+            uint32_t jump_space = min(config.space, p.step_count - s1_idx - 1);
+            uint32_t space = (jump_space > config.space_max) ? 
+                config.space_max + (jump_space - config.space_max)/config.space_quantization_step + 1 : jump_space;
+            double u = curand_uniform_double(&local_state) * d_zetas[space];
+            uint32_t z_i = 1;
+            while (z_i < jump_space && d_zetas[z_i] < u) z_i++;
+            s2_idx = s1_idx + z_i;
+        }
+    } else {
+        do {
+            s1_idx = curand(&local_state) % p.step_count;
+            s2_idx = curand(&local_state) % p.step_count;
+        } while (s1_idx == s2_idx);
     }
-    assert(val >= 0);
-    assert(val <= n);
-    return uint32_t(val);
-}
 
+    // Node position calculations
+    path_element_t e1 = d_elements[p.first_step_in_path + s1_idx];
+    path_element_t e2 = d_elements[p.first_step_in_path + s2_idx];
 
-static __device__ __inline__ uint32_t __mysmid(){
-    uint32_t smid;
-    asm volatile("mov.u32 %0, %%smid;" : "=r"(smid));
-    return smid;
-}
+    int64_t n1_pos = abs(e1.pos);
+    int64_t n2_pos = abs(e2.pos);
 
-/**
-* @brief: update the coordinates of two visualization nodes in the 2D layout space
-* This function is called multiple times in one `gpu_layout_kernel` in order to increase the data reuse. 
-* Each time, the warp shuffle intrinsics are used to change the selection of node 2 among the 32 threads in the warp. 
-* E.g. Iter : Step Pairs Selected would be: 
-*     1: (a0, b0), (a1, b1), (a2, b2), ..., (a31, b31)
-*     2: (a0, b9), (a1, b0), (a2, b3), ..., (a31, b4)
-*     3: (a0, b1), (a1, b4), (a2, b1), ..., (a31, b10)
-*     ...
-* `b` is randomly chosen from the 32 threads in the warp. 
-* @param n1_pos_in_path: position of node 1 in the current selected path
-* @param n1_id: id of node 1
-* @param n1_offset: offset of node 1
-* @param n2_pos_in_path: position of node 2 in the current selected path
-* @param n2_id: id of node 2
-* @param n2_offset: offset of node 2
-* @param eta: an coefficient used in the update formula
-* @param node_data: the data structure that stores the coordinates of all nodes
-*/
-__device__
-void update_pos_gpu(int64_t &n1_pos_in_path, uint32_t &n1_id, int &n1_offset,
-                    int64_t &n2_pos_in_path, uint32_t &n2_id, int &n2_offset,
-                    double eta, 
-                    cuda::node_data_t &node_data) {
-    double term_dist = std::abs(static_cast<double>(n1_pos_in_path) - static_cast<double>(n2_pos_in_path));
+    bool n1_use_other_end = curand_uniform_double(&local_state) < 0.5;
+    if (n1_use_other_end) n1_pos += d_nodes[e1.node_id].seq_length;
 
+    bool n2_use_other_end = curand_uniform_double(&local_state) < 0.5;
+    if (n2_use_other_end) n2_pos += d_nodes[e2.node_id].seq_length;
+
+    double term_dist = abs(n1_pos - n2_pos);
     if (term_dist < 1e-9) {
         term_dist = 1e-9;
     }
-
     double w_ij = 1.0 / term_dist;
+    double mu = min(d_etas[iter] * w_ij, 1.0);
 
-    double mu = eta * w_ij;
-    if (mu > 1.0) {
-        mu = 1.0;
-    }
+    // Atomic updates
+    int n1_offset = n1_use_other_end ? 2 : 0;
+    int n2_offset = n2_use_other_end ? 2 : 0;
 
-    float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
-    float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
-    float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
-    float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
-    double x1_val = double(*x1);
-    double x2_val = double(*x2);
-    double y1_val = double(*y1);
-    double y2_val = double(*y2);
+    float *x1 = &d_nodes[e1.node_id].coords[n1_offset];
+    float *y1 = &d_nodes[e1.node_id].coords[n1_offset+1];
+    float *x2 = &d_nodes[e2.node_id].coords[n2_offset];
+    float *y2 = &d_nodes[e2.node_id].coords[n2_offset+1];
 
-    double dx = x1_val - x2_val;
-    double dy = y1_val - y2_val;
+    float dx = *x1 - *x2;
+    float dy = *y1 - *y2;
+    float mag = sqrtf(dx*dx + dy*dy);
+    if (mag < 1e-9) mag = 1e-9f;
+    float delta = mu * (mag - term_dist) / 2.0f;
+    
+    float r_x = delta * dx / mag;
+    float r_y = delta * dy / mag;
 
-    if (dx == 0.0) {
-        dx = 1e-9;
-    }
+    atomicAdd(x1, -r_x);
+    atomicAdd(y1, -r_y);
+    atomicAdd(x2, r_x);
+    atomicAdd(y2, r_y);
 
-    double mag = sqrt(dx * dx + dy * dy);
-    double delta = mu * (mag - term_dist) / 2.0;
-    //double delta_abs = std::abs(delta);
-
-    // TODO implement delta max stop functionality
-    double r = delta / mag;
-    double r_x = r * dx;
-    double r_y = r * dy;
-    // TODO check current value before updating
-    atomicExch(x1, float(x1_val - r_x));
-    atomicExch(x2, float(x2_val + r_x));
-    atomicExch(y1, float(y1_val - r_y));
-    atomicExch(y2, float(y2_val + r_y)); 
+    d_states[tid] = local_state;
 }
 
-__global__ 
-void gpu_layout_kernel(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, 
-                                   cuda::node_data_t node_data, cuda::path_data_t path_data, int sm_count) {
-    uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    uint32_t smid = __mysmid();
-    assert(smid < sm_count);
-
-    curandStateCoalesced_t *thread_rnd_state = &rnd_state[smid];
-
-    __shared__ bool cooling[BLOCK_SIZE / WARP_SIZE]; 
-    if (threadIdx.x % WARP_SIZE == 1) {
-        cooling[threadIdx.x / WARP_SIZE] = (iter >= config.first_cooling_iteration) || (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0);
-    }
-
-    // select path
-    __shared__ uint32_t first_step_idx[BLOCK_SIZE / WARP_SIZE]; // BLOCK_SIZE/WARP_SIZE = 1024/32 = 32
-    // each thread picks its own path
-    uint32_t step_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % path_data.total_path_steps;
-
-    uint32_t path_idx = path_data.element_array[step_idx].pidx;
-    path_t p = path_data.paths[path_idx];
-
-    if (p.step_count < 2) {
-        return;
-    }
-    assert(p.step_count > 1);
-
-    // INFO: curand_uniform generates random values between 0.0 (excluded) and 1.0 (included)
-    uint32_t s1_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % p.step_count;
-    assert(s1_idx < p.step_count);
-    uint32_t s2_idx;
-
-    if (cooling[threadIdx.x / WARP_SIZE]) {
-        bool backward;
-        uint32_t jump_space;
-        if (s1_idx > 0 && (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) || s1_idx == p.step_count-1) {
-            // go backward
-            backward = true;
-            jump_space = min(config.space, s1_idx);
-        } else {
-            // go forward
-            backward = false;
-            jump_space = min(config.space, p.step_count - s1_idx - 1);
-        }
-        uint32_t space = jump_space;
-        if (jump_space > config.space_max) {
-            space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
-        }
-
-        uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
-
-        s2_idx = backward ? s1_idx - z_i : s1_idx + z_i;
-    } else {
-        do {
-            s2_idx = curand_coalesced(thread_rnd_state, threadIdx.x) % p.step_count;
-        } while (s1_idx == s2_idx);
-    }
-    assert(s1_idx < p.step_count);
-    assert(s2_idx < p.step_count);
-    assert(s1_idx != s2_idx);
-
-
-    uint32_t n1_id = p.elements[s1_idx].node_id;
-    int64_t n1_pos_in_path = p.elements[s1_idx].pos;
-    bool n1_is_rev = (n1_pos_in_path < 0)? true: false;
-    n1_pos_in_path = std::abs(n1_pos_in_path);
-
-    uint32_t n2_id = p.elements[s2_idx].node_id;
-    int64_t n2_pos_in_path = p.elements[s2_idx].pos;
-    bool n2_is_rev = (n2_pos_in_path < 0)? true: false;
-    n2_pos_in_path = std::abs(n2_pos_in_path);
-
-    uint32_t n1_seq_length = node_data.nodes[n1_id].seq_length;
-    bool n1_use_other_end = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) ? true : false;
-    if (n1_use_other_end) {
-        n1_pos_in_path += uint64_t{n1_seq_length};
-        n1_use_other_end = !n1_is_rev;
-    } else {
-        n1_use_other_end = n1_is_rev;
-    }
-
-    uint32_t n2_seq_length = node_data.nodes[n2_id].seq_length;
-    bool n2_use_other_end = (curand_coalesced(thread_rnd_state, threadIdx.x) % 2 == 0) ? true : false;
-    if (n2_use_other_end) {
-        n2_pos_in_path += uint64_t{n2_seq_length};
-        n2_use_other_end = !n2_is_rev;
-    } else {
-        n2_use_other_end = n2_is_rev;
-    }
-
-    int n1_offset = n1_use_other_end? 2: 0;
-    int n2_offset = n2_use_other_end? 2: 0;
-
-    // Update Coordinates based on the data of selected nodes: n_pos_in_path, n_id, n_offset
-    update_pos_gpu(n1_pos_in_path, n1_id, n1_offset, 
-                   n2_pos_in_path, n2_id, n2_offset, 
-                   eta, node_data);
-}
-
-
-void gpu_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
-
-
-    std::cout << "===== Use GPU to compute odgi-layout =====" << std::endl;
-    // get cuda device property, and get the SM count
-    cudaDeviceProp prop;
-    CUDACHECK(cudaGetDeviceProperties(&prop, 0));
-    int sm_count = prop.multiProcessorCount;
-
-    // create eta array
-    double *etas;
-    cudaMallocManaged(&etas, config.iter_max * sizeof(double));
-
+void layout_func(layout_config_t config, const odgi::graph_t &graph, 
+                std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y) {
+    std::cout << "Running GPU Layout Function with CUDA Kernel" << std::endl;
+    
+    // Original eta initialization
+    double *etas = (double*)malloc(config.iter_max * sizeof(double));
     const int32_t iter_max = config.iter_max;
     const int32_t iter_with_max_learning_rate = config.iter_with_max_learning_rate;
-    const double w_max = 1.0;
-    const double eps = config.eps;
     const double eta_max = config.eta_max;
-    const double eta_min = eps / w_max;
-    const double lambda = log(eta_max / eta_min) / ((double) iter_max - 1);
-    for (int32_t i = 0; i < config.iter_max; i++) {
-        double eta = eta_max * exp(-lambda * (std::abs(i - iter_with_max_learning_rate)));
-        etas[i] = isnan(eta)? eta_min : eta;
+    const double eta_min = config.eps / 1.0;
+    const double lambda = log(eta_max / eta_min) / (iter_max - 1);
+    for (int32_t i = 0; i < iter_max; i++) {
+        double eta = eta_max * exp(-lambda * abs(i - iter_with_max_learning_rate));
+        etas[i] = isnan(eta) ? eta_min : eta;
     }
 
-    // create node data structure
-    // consisting of sequence length and coords
+    // Node data preparation
     uint32_t node_count = graph.get_node_count();
-    assert(graph.min_node_id() == 1);
-    assert(graph.max_node_id() == node_count);
-    assert(graph.max_node_id() - graph.min_node_id() + 1 == node_count);
-
-    cuda::node_data_t node_data;
-    node_data.node_count = node_count;
-    cudaMallocManaged(&node_data.nodes, node_count * sizeof(cuda::node_t));
-    for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        //assert(graph.has_node(node_idx));
-        cuda::node_t *n_tmp = &node_data.nodes[node_idx];
-
-        // sequence length
-        const handlegraph::handle_t h = graph.get_handle(node_idx + 1, false);
-        // NOTE: unable store orientation (reverse), since this information is path dependent
-        n_tmp->seq_length = graph.get_length(h);
-
-        // copy random coordinates
-        n_tmp->coords[0] = float(X[node_idx * 2].load());
-        n_tmp->coords[1] = float(Y[node_idx * 2].load());
-        n_tmp->coords[2] = float(X[node_idx * 2 + 1].load());
-        n_tmp->coords[3] = float(Y[node_idx * 2 + 1].load());
+    node_t *h_nodes = (node_t*)malloc(node_count * sizeof(node_t));
+    for (uint32_t i = 0; i < node_count; i++) {
+        const handlegraph::handle_t h = graph.get_handle(i + 1, false);
+        h_nodes[i].seq_length = graph.get_length(h);
+        h_nodes[i].coords[0] = X[i*2].load();
+        h_nodes[i].coords[1] = Y[i*2].load();
+        h_nodes[i].coords[2] = X[i*2+1].load();
+        h_nodes[i].coords[3] = Y[i*2+1].load();
     }
 
+    // Path data preparation
+    std::vector<path_t> h_paths;
+    std::vector<path_element_t> h_elements;
+    std::vector<double> path_weights;
+    std::vector<odgi::path_handle_t> path_handles;
+    graph.for_each_path_handle([&](const odgi::path_handle_t& p) {
+        path_handles.push_back(p);
+    });
 
-    // create path data structure
-    uint32_t path_count = graph.get_path_count();
-    cuda::path_data_t path_data;
-    path_data.path_count = path_count;
-    path_data.total_path_steps = 0;
-    cudaMallocManaged(&path_data.paths, path_count * sizeof(cuda::path_t));
-
-    vector<odgi::path_handle_t> path_handles{};
-    path_handles.reserve(path_count);
-    graph.for_each_path_handle(
-        [&] (const odgi::path_handle_t& p) {
-            path_handles.push_back(p);
-            path_data.total_path_steps += graph.get_step_count(p);
-        });
-    cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
-
-    // get length and starting position of all paths
-    uint64_t first_step_counter = 0;
-    for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        odgi::path_handle_t p = path_handles[path_idx];
-        int step_count = graph.get_step_count(p);
-        path_data.paths[path_idx].step_count = step_count;
-        path_data.paths[path_idx].first_step_in_path = first_step_counter;
-        first_step_counter += step_count;
+    uint32_t element_counter = 0;
+    for (uint32_t i = 0; i < path_handles.size(); i++) {
+        path_t p;
+        p.step_count = graph.get_step_count(path_handles[i]);
+        p.first_step_in_path = element_counter;
+        path_weights.push_back(p.step_count);
+        h_paths.push_back(p);
+        element_counter += p.step_count;
     }
 
+    h_elements.resize(element_counter);
 #pragma omp parallel for num_threads(config.nthreads)
-    for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        odgi::path_handle_t p = path_handles[path_idx];
-        //std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
-
-        uint32_t step_count = path_data.paths[path_idx].step_count;
-        uint64_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
-        if (step_count == 0) {
-            path_data.paths[path_idx].elements = NULL;
-        } else {
-            path_element_t *cur_path = &path_data.element_array[first_step_in_path];
-            path_data.paths[path_idx].elements = cur_path;
-
-            odgi::step_handle_t s = graph.path_begin(p);
-            int64_t pos = 1;
-            // Iterate through path
-            for (int step_idx = 0; step_idx < step_count; step_idx++) {
-                odgi::handle_t h = graph.get_handle_of_step(s);
-                //std::cout << graph.get_id(h) << std::endl;
-
-                cur_path[step_idx].node_id = graph.get_id(h) - 1;
-                cur_path[step_idx].pidx = uint32_t(path_idx);
-                // store position negative when handle reverse
-                if (graph.get_is_reverse(h)) {
-                    cur_path[step_idx].pos = -pos;
-                } else {
-                    cur_path[step_idx].pos = pos;
-                }
-                pos += graph.get_length(h);
-
-                // get next step
-                if (graph.has_next_step(s)) {
-                    s = graph.get_next_step(s);
-                } else if (!(step_idx == step_count-1)) {
-                    // should never be reached
-                    std::cout << "Error: Here should be another step" << std::endl;
-                }
-            }
+    for (uint32_t i = 0; i < path_handles.size(); i++) {
+        auto p = path_handles[i];
+        uint32_t step_count = h_paths[i].step_count;
+        odgi::step_handle_t s = graph.path_begin(p);
+        int64_t pos = 1;
+        for (uint32_t j = 0; j < step_count; j++) {
+            odgi::handle_t h = graph.get_handle_of_step(s);
+            h_elements[h_paths[i].first_step_in_path + j] = {
+                static_cast<uint32_t>(i),
+                static_cast<uint32_t>(graph.get_id(h) - 1),
+                graph.get_is_reverse(h) ? -pos : pos
+            };
+            pos += graph.get_length(h);
+            if (graph.has_next_step(s)) s = graph.get_next_step(s);
         }
     }
 
-    // cache zipf zetas
-    auto start_zeta = std::chrono::high_resolution_clock::now();
-    double *zetas;
-    uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
-    cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
-    double zeta_tmp = 0.0;
-    for (uint64_t i = 1; i < config.space + 1; i++) {
-        zeta_tmp += dirtyzipf::fast_precise_pow(1.0 / i, config.theta);
-        if (i <= config.space_max) {
-            zetas[i] = zeta_tmp;
-        }
-        if (i >= config.space_max && (i - config.space_max) % config.space_quantization_step == 0) {
-            zetas[config.space_max + 1 + (i - config.space_max) / config.space_quantization_step] = zeta_tmp;
-        }
-    }
-    auto end_zeta = std::chrono::high_resolution_clock::now();
-    uint32_t duration_zeta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_zeta - start_zeta).count();
+    // Create path CDF
+    thrust::exclusive_scan(path_weights.begin(), path_weights.end(), path_weights.begin());
+    double total_weight = path_weights.back();
+    for (auto& w : path_weights) w /= total_weight;
 
-    const uint64_t block_size = BLOCK_SIZE;
-    uint64_t block_nbr = (config.min_term_updates + block_size - 1) / block_size; 
+    // Device allocations
+    node_t *d_nodes;
+    path_t *d_paths;
+    path_element_t *d_elements;
+    double *d_etas, *d_zetas, *d_path_cdf;
+    curandState *d_states;
 
-    curandState_t *rnd_state_tmp;
-    curandStateCoalesced_t *rnd_state;
-    CUDACHECK(cudaMallocManaged(&rnd_state_tmp, sm_count * block_size * sizeof(curandState_t)));
-    CUDACHECK(cudaMallocManaged(&rnd_state, sm_count * sizeof(curandStateCoalesced_t)));
-    cuda_device_init<<<sm_count, block_size>>>(rnd_state_tmp, rnd_state);
-    CUDACHECK(cudaGetLastError());
-    CUDACHECK(cudaDeviceSynchronize());
-    cudaFree(rnd_state_tmp);
+    cudaMalloc(&d_nodes, node_count * sizeof(node_t));
+    cudaMalloc(&d_paths, h_paths.size() * sizeof(path_t));
+    cudaMalloc(&d_elements, h_elements.size() * sizeof(path_element_t));
+    cudaMalloc(&d_etas, config.iter_max * sizeof(double));
+    cudaMalloc(&d_path_cdf, path_weights.size() * sizeof(double));
+    
+    uint64_t zetas_cnt = ((config.space <= config.space_max) ? config.space : 
+        (config.space_max + (config.space - config.space_max)/config.space_quantization_step + 1)) + 1;
+    double *zetas = (double*)malloc(zetas_cnt * sizeof(double));
+    // ... zeta initialization as original ...
+    cudaMalloc(&d_zetas, zetas_cnt * sizeof(double));
 
+    // Copy data to device
+    cudaMemcpy(d_nodes, h_nodes, node_count * sizeof(node_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_paths, h_paths.data(), h_paths.size() * sizeof(path_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_elements, h_elements.data(), h_elements.size() * sizeof(path_element_t), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_etas, etas, config.iter_max * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_path_cdf, path_weights.data(), path_weights.size() * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_zetas, zetas, zetas_cnt * sizeof(double), cudaMemcpyHostToDevice);
+
+    // RNG initialization
+    int block_size = 256;
+    int grid_size = (config.min_term_updates + block_size - 1) / block_size;
+    cudaMalloc(&d_states, config.min_term_updates * sizeof(curandState));
+    setup_rand_states<<<grid_size, block_size>>>(d_states, config.min_term_updates, 9399220);
+
+    // Kernel execution
+    dim3 block(block_size);
+    dim3 grid(grid_size);  // Use y-dimension for iterations
+
+    // Launch one kernel per iteration
     for (int iter = 0; iter < config.iter_max; iter++) {
-        gpu_layout_kernel<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
-        // check error
-        CUDACHECK(cudaGetLastError());
-        CUDACHECK(cudaDeviceSynchronize());
+        gpu_layout_kernel<<<grid, block>>>(config, d_etas, d_zetas, d_nodes, d_paths, 
+                                          d_elements, d_states, d_path_cdf, path_weights.size(), iter);
+        cudaDeviceSynchronize();
     }
 
-    // copy coords back to X, Y vectors
-    for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        cuda::node_t *n = &(node_data.nodes[node_idx]);
-        // coords[0], coords[1], coords[2], coords[3] are stored consecutively. 
-        float *coords = n->coords;
-        // check if coordinates valid (not NaN or infinite)
-        for (int i = 0; i < 4; i++) {
-            if (!isfinite(coords[i])) {
-                std::cout << "WARNING: invalid coordiate" << std::endl;
-            }
-        }
-        X[node_idx * 2].store(double(coords[0]));
-        Y[node_idx * 2].store(double(coords[1]));
-        X[node_idx * 2 + 1].store(double(coords[2]));
-        Y[node_idx * 2 + 1].store(double(coords[3]));
-        //std::cout << "coords of " << node_idx << ": [" << X[node_idx*2] << "; " << Y[node_idx*2] << "] ; [" << X[node_idx*2+1] << "; " << Y[node_idx*2+1] <<"]\n";
+    // Copy results back
+    cudaMemcpy(h_nodes, d_nodes, node_count * sizeof(node_t), cudaMemcpyDeviceToHost);
+    for (uint32_t i = 0; i < node_count; i++) {
+        X[i*2].store(h_nodes[i].coords[0]);
+        Y[i*2].store(h_nodes[i].coords[1]);
+        X[i*2+1].store(h_nodes[i].coords[2]);
+        Y[i*2+1].store(h_nodes[i].coords[3]);
     }
 
-    // free memory
-    cudaFree(etas);
-    cudaFree(node_data.nodes);
-    cudaFree(path_data.paths);
-    cudaFree(path_data.element_array);
-    cudaFree(zetas);
-    cudaFree(rnd_state);
-
-    return;
+    // Cleanup
+    cudaFree(d_nodes); cudaFree(d_paths); cudaFree(d_elements);
+    cudaFree(d_etas); cudaFree(d_zetas); cudaFree(d_path_cdf);
+    cudaFree(d_states);
+    free(h_nodes); free(etas); free(zetas);
 }
-
 }

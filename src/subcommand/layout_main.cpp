@@ -330,32 +330,32 @@ int main_layout(int argc, char **argv) {
       });
 
     //double max_x = 0;
-#ifdef USE_GPU
-    if (gpu_compute) { // run on GPU
-        algorithms::path_linear_sgd_layout_gpu(
-            graph,
-            path_index,
-            path_sgd_use_paths,
-            path_sgd_iter_max,
-            0,
-            path_sgd_min_term_updates,
-            sgd_delta,
-            eps,
-            path_sgd_max_eta,
-            path_sgd_zipf_theta,
-            path_sgd_zipf_space,
-            path_sgd_zipf_space_max,
-            path_sgd_zipf_space_quantization_step,
-            path_sgd_cooling,
-            num_threads,
-            show_progress,
-            snapshot,
-            snapshot_prefix,
-            graph_X,
-            graph_Y
-            );
-    } 
-#endif
+// #ifdef USE_GPU
+//     if (gpu_compute) { // run on GPU
+//         algorithms::path_linear_sgd_layout_gpu(
+//             graph,
+//             path_index,
+//             path_sgd_use_paths,
+//             path_sgd_iter_max,
+//             0,
+//             path_sgd_min_term_updates,
+//             sgd_delta,
+//             eps,
+//             path_sgd_max_eta,
+//             path_sgd_zipf_theta,
+//             path_sgd_zipf_space,
+//             path_sgd_zipf_space_max,
+//             path_sgd_zipf_space_quantization_step,
+//             path_sgd_cooling,
+//             num_threads,
+//             show_progress,
+//             snapshot,
+//             snapshot_prefix,
+//             graph_X,
+//             graph_Y
+//             );
+//     } 
+// #endif
 
 #ifdef USE_GPU
     if (!gpu_compute) { // run on CPU

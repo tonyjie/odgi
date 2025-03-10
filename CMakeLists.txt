@@ -636,6 +636,7 @@ add_library(odgi_objs OBJECT
   ${handlegraph_sources}
 )
 if (USE_GPU)
+  # target_sources(odgi_objs PRIVATE "${CMAKE_SOURCE_DIR}/src/cuda/layout.cpp")
   target_sources(odgi_objs PRIVATE "${CMAKE_SOURCE_DIR}/src/cuda/layout.cu")
 endif (USE_GPU)
 
@@ -824,7 +825,8 @@ set(odgi_HEADERS
   ${CMAKE_SOURCE_DIR}/src/algorithms/path_keep.hpp
   ${CMAKE_SOURCE_DIR}/src/algorithms/diffpriv.cpp)
 if (USE_GPU)
-  list(APPEND odgi_HEADERS "${CMAKE_SOURCE_DIR}/src/cuda/layout.h")
+  # list(APPEND odgi_HEADERS "${CMAKE_SOURCE_DIR}/src/cuda/layout.h")
+  list(APPEND odgi_HEADERS "${CMAKE_SOURCE_DIR}/src/cuda/layout.cuh")
 endif (USE_GPU)
 
 target_include_directories(odgi_objs PUBLIC ${odgi_INCLUDES})

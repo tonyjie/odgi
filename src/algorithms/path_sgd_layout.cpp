@@ -25,7 +25,7 @@ namespace odgi {
                                     const std::string &snapshot_prefix,
                                     std::vector<std::atomic<double>> &X,
                                     std::vector<std::atomic<double>> &Y) {
-            cuda::layout_config_t config;
+            layout_kernel::layout_config_t config;
             config.iter_max = iter_max;
             config.min_term_updates = min_term_updates;
             config.eta_max = eta_max;
@@ -37,7 +37,7 @@ namespace odgi {
             config.space_max = uint32_t(space_max);
             config.space_quantization_step = uint32_t(space_quantization_step);
             config.nthreads = nthreads;
-            cuda::gpu_layout(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y);
+            layout_kernel::layout_func(config, dynamic_cast<const odgi::graph_t&>(graph), X, Y);
             return;
         }      
 
