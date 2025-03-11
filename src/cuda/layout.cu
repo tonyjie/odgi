@@ -90,6 +90,7 @@ struct float2coords {
 
 
 // o1
+
 __global__ void cuda_device_layout(
     int iter,
     cuda::layout_config_t config,
@@ -261,164 +262,179 @@ __global__ void cuda_device_layout(
 
     // --------------------------------------------------------------------
     // Update partial movement using atomicAdd
-    // (Set this back to atomicExch if you must replicate exact overwrites)
-    // --------------------------------------------------------------------
-    atomicAdd(&(coords.data[n1_id * 2 + n1_offset].x), float(-r_x));
-    atomicAdd(&(coords.data[n1_id * 2 + n1_offset].y), float(-r_y));
-    atomicAdd(&(coords.data[n2_id * 2 + n2_offset].x), float(+r_x));
-    atomicAdd(&(coords.data[n2_id * 2 + n2_offset].y), float(+r_y));
+
+    // use atomicExch
+    atomicExch(&(coords.data[n1_id * 2 + n1_offset].x), float(double(c1.x) - r_x));
+    atomicExch(&(coords.data[n1_id * 2 + n1_offset].y), float(double(c1.y) - r_y));
+    atomicExch(&(coords.data[n2_id * 2 + n2_offset].x), float(double(c2.x) + r_x));
+    atomicExch(&(coords.data[n2_id * 2 + n2_offset].y), float(double(c2.y) + r_y));
 }
 
 
 
 // o3-mini
 /*
+// Optimized kernel: note the new signature uses __restrict__ and const qualifiers
 __global__ void cuda_device_layout(int iter,
-                                     const layout_config_t config,
-                                     curandState * __restrict__ rnd_state,
-                                     double eta,
-                                     const double * __restrict__ zetas,
-                                     const node_data_t node_data,
-                                     const path_data_t path_data,
-                                     const uint32_t * __restrict__ pidx_array,
-                                     const int64_t * __restrict__ pos_array,
-                                     const uint32_t * __restrict__ node_id_array,
-                                     float * __restrict__ x_coords,
-                                     float * __restrict__ y_coords,
-                                     const int32_t * __restrict__ seq_length_array,
-                                     int sm_count) {
-    // Compute thread id and SM id.
+    const layout_config_t config,
+    curandState * __restrict__ rnd_state,
+    double eta,
+    const double * __restrict__ zetas,
+    node_data_t node_data,
+    path_data_t path_data,
+    const uint32_t * __restrict__ pidx_array,
+    const int64_t * __restrict__ pos_array,
+    const uint32_t * __restrict__ node_id_array,
+    float * __restrict__ x_coords,
+    float * __restrict__ y_coords,
+    const int32_t * __restrict__ seq_length_array,
+    int sm_count)
+{
+    // thread id and SM id in current grid configuration
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-    uint32_t smid = __mysmid();
-    // An assert is kept for debugging; in production one might check and return early.
-    assert(smid < (uint32_t)sm_count);
-    
-    // Use blockDim.x rather than a hardcoded 1024 in index computation.
+    uint32_t smid = __mysmid();  // Assumes __mysmid() returns the SM ID (and that only one block per SM executes concurrently)
     curandState *thread_rnd_state = &rnd_state[smid * blockDim.x + threadIdx.x];
 
-    // Select a random path step.
-    uint32_t total_steps = path_data.total_path_steps;
-    uint32_t step_idx = curand(thread_rnd_state) % total_steps;
+    // For better memory behavior, have all threads in a warp pick the same “step” index.
+    const unsigned int laneId = threadIdx.x & 31;  // threadIdx.x % 32
+    uint32_t step_idx;
+    if (laneId == 0)
+    {
+        step_idx = curand(thread_rnd_state) % path_data.total_path_steps;
+    }
+    step_idx = __shfl_sync(0xFFFFFFFF, step_idx, 0);
+
+    // Look up the path index from the LUT (all threads in the warp have the same step_idx)
     uint32_t path_idx = pidx_array[step_idx];
-
-    // Load the path from global memory.
     path_t p = path_data.paths[path_idx];
-    if (p.step_count < 2) return;
-    assert(p.step_count > 1);
+    if (p.step_count < 2)
+        return;  // Nothing to do if path too short
 
-    // Choose a random step index for the first endpoint.
+    // Generate the first index in the path (each thread gets its own s1 index)
     uint32_t s1_idx = curand(thread_rnd_state) % p.step_count;
-    uint32_t s2_idx = 0;
+    uint32_t s2_idx;
 
-    // Use one random bit to decide on cooling if possible.
-    bool random_bit = ((curand(thread_rnd_state) & 1u) != 0);
-    bool cooling = (iter >= config.first_cooling_iteration) || (!random_bit);
-    
-    if (cooling) {
-        // Decide randomly (with a bit) if we go backward or forward.
-        bool go_backward = ((s1_idx > 0) && ((curand(thread_rnd_state) & 1u) != 0)) ||
-                           (s1_idx == p.step_count - 1);
-        if (go_backward) {
+    // Decide whether to use a cooling move.
+    // (We use bit masking to check a coin flip instead of % 2; note the iter check remains)
+    bool cooling = (iter >= config.first_cooling_iteration) || ((curand(thread_rnd_state) & 1u) == 0);
+
+    if (cooling)
+    {
+        // Branch into backward/forward changes; note that we combine the coin flip into a temporary.
+        bool go_backward = false;
+        if (s1_idx > 0 && ((curand(thread_rnd_state) & 1u) == 0))
+            go_backward = true;
+        if (s1_idx == p.step_count - 1)
+            go_backward = true;  // must go backward if at last step
+
+        if (go_backward)
+        {
             uint32_t jump_space = min(config.space, s1_idx);
-            // Compute the effective parameter for zeta lookup.
-            uint32_t eff_space = effective_space(jump_space, config);
-            // __ldg() hints the compiler to use the read–only cache for zetas.
-            uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta,
-                                         __ldg(&zetas[2]), __ldg(&zetas[eff_space]));
-            if (z_i > s1_idx) {
-                printf("Error (thread %u): %u - %u\n", threadIdx.x, s1_idx, z_i);
-                printf("Jumpspace %u, theta %f, zeta %f\n", jump_space, config.theta, __ldg(&zetas[eff_space]));
+            uint32_t space = jump_space;
+            if (jump_space > config.space_max)
+            {
+                space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
             }
+            uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
             assert(z_i <= s1_idx);
             s2_idx = s1_idx - z_i;
-        } else {
+        }
+        else
+        {
             uint32_t jump_space = min(config.space, p.step_count - s1_idx - 1);
-            uint32_t eff_space = effective_space(jump_space, config);
-            uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta,
-                                         __ldg(&zetas[2]), __ldg(&zetas[eff_space]));
-            if (z_i > p.step_count - s1_idx - 1) {
-                printf("Error (thread %u): %u + %u, step_count %u\n",
-                       threadIdx.x, s1_idx, z_i, p.step_count);
-                printf("Jumpspace %u, theta %f, zeta %f\n",
-                       jump_space, config.theta, __ldg(&zetas[eff_space]));
+            uint32_t space = jump_space;
+            if (jump_space > config.space_max)
+            {
+                space = config.space_max + (jump_space - config.space_max) / config.space_quantization_step + 1;
             }
+            uint32_t z_i = cuda_rnd_zipf(thread_rnd_state, jump_space, config.theta, zetas[2], zetas[space]);
             assert(s1_idx + z_i < p.step_count);
             s2_idx = s1_idx + z_i;
         }
-    } else {
-        // In the non–cooling branch ensure s1_idx != s2_idx.
+    }
+    else
+    {
+        // When not cooling, choose another random step (ensure s2_idx != s1_idx)
         do {
             s2_idx = curand(thread_rnd_state) % p.step_count;
         } while (s1_idx == s2_idx);
     }
-    assert(s1_idx < p.step_count);
-    assert(s2_idx < p.step_count);
-    assert(s1_idx != s2_idx);
 
-    // Compute the global positions for the two nodes.
-    uint64_t base_index1 = p.first_step_in_path + s1_idx;
-    uint32_t n1_id = node_id_array[base_index1];
-    int64_t n1_pos_in_path = pos_array[base_index1];
+    // Cache the base offset (first step in this path) for use in several accesses.
+    uint64_t base = p.first_step_in_path;
+
+    // Retrieve node IDs and positions for the two steps.
+    uint32_t n1_id = node_id_array[base + s1_idx];
+    int64_t n1_pos_in_path = pos_array[base + s1_idx];
     bool n1_is_rev = (n1_pos_in_path < 0);
-    n1_pos_in_path = abs(n1_pos_in_path);
-    
-    uint64_t base_index2 = p.first_step_in_path + s2_idx;
-    uint32_t n2_id = node_id_array[base_index2];
-    int64_t n2_pos_in_path = pos_array[base_index2];
-    bool n2_is_rev = (n2_pos_in_path < 0);
-    n2_pos_in_path = abs(n2_pos_in_path);
+    n1_pos_in_path = (n1_pos_in_path < 0) ? -n1_pos_in_path : n1_pos_in_path;
 
-    // Update positions based on sequence lengths and a random decision.
+    uint32_t n2_id = node_id_array[base + s2_idx];
+    int64_t n2_pos_in_path = pos_array[base + s2_idx];
+    bool n2_is_rev = (n2_pos_in_path < 0);
+    n2_pos_in_path = (n2_pos_in_path < 0) ? -n2_pos_in_path : n2_pos_in_path;
+
+    // Decide on “other-end” use via a coin flip.
     uint32_t n1_seq_length = seq_length_array[n1_id];
-    bool n1_use_other_end = ((curand(thread_rnd_state) & 1u) != 0);
-    if (n1_use_other_end) {
+    bool n1_use_other_end = ((curand(thread_rnd_state) & 1u) == 0);
+    if (n1_use_other_end)
+    {
         n1_pos_in_path += n1_seq_length;
         n1_use_other_end = !n1_is_rev;
-    } else {
+    }
+    else
+    {
         n1_use_other_end = n1_is_rev;
     }
 
     uint32_t n2_seq_length = seq_length_array[n2_id];
-    bool n2_use_other_end = ((curand(thread_rnd_state) & 1u) != 0);
-    if (n2_use_other_end) {
+    bool n2_use_other_end = ((curand(thread_rnd_state) & 1u) == 0);
+    if (n2_use_other_end)
+    {
         n2_pos_in_path += n2_seq_length;
         n2_use_other_end = !n2_is_rev;
-    } else {
+    }
+    else
+    {
         n2_use_other_end = n2_is_rev;
     }
-    
-    double term_dist = fabs(static_cast<double>(n1_pos_in_path) - static_cast<double>(n2_pos_in_path));
-    if (term_dist < 1e-9) term_dist = 1e-9;
+
+    // Compute the “term distance” and weight.
+    double term_dist = fabs(double(n1_pos_in_path) - double(n2_pos_in_path));
+    if (term_dist < 1e-9)
+        term_dist = 1e-9;
     double w_ij = 1.0 / term_dist;
     double mu = eta * w_ij;
-    if (mu > 1.0) mu = 1.0;
+    if (mu > 1.0)
+        mu = 1.0;
     double d_ij = term_dist;
 
-    // Determine offsets and compute pointers to coordinate arrays.
+    // Determine coordinate offsets depending on whether the “other-end” is used.
     int n1_offset = n1_use_other_end ? 1 : 0;
     int n2_offset = n2_use_other_end ? 1 : 0;
-    
+
+    // Compute pointers to the coordinate values. (Each node has two coordinate entries.)
     float *x1 = &x_coords[n1_id * 2 + n1_offset];
     float *x2 = &x_coords[n2_id * 2 + n2_offset];
     float *y1 = &y_coords[n1_id * 2 + n1_offset];
     float *y2 = &y_coords[n2_id * 2 + n2_offset];
-    
-    // Load coordinate values into registers.
-    double x1_val = static_cast<double>(*x1);
-    double x2_val = static_cast<double>(*x2);
-    double y1_val = static_cast<double>(*y1);
-    double y2_val = static_cast<double>(*y2);
-    
+    double x1_val = double(*x1);
+    double x2_val = double(*x2);
+    double y1_val = double(*y1);
+    double y2_val = double(*y2);
+
+    // Compute the displacement between the two nodes.
     double dx = x1_val - x2_val;
     double dy = y1_val - y2_val;
-    if (dx == 0.0) dx = 1e-9;
+    if (dx == 0.0)
+        dx = 1e-9;
     double mag = sqrt(dx * dx + dy * dy);
     double delta = mu * (mag - d_ij) / 2.0;
     double r = delta / mag;
     double r_x = r * dx;
     double r_y = r * dy;
-    
-    // Use atomicExch to safely update coordinate positions.
+
+    // Update the coordinates with atomic operations.
     atomicExch(x1, float(x1_val - r_x));
     atomicExch(x2, float(x2_val + r_x));
     atomicExch(y1, float(y1_val - r_y));
