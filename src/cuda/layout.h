@@ -26,6 +26,16 @@ struct node_data_t {
     node_t *nodes;
 };
 
+// New SoA data structure for node data.
+// struct node_data_t {
+//     uint32_t node_count;
+//     int32_t *seq_lengths;    // sequence lengths for each node
+//     float   *x1;             // first coordinate of first end
+//     float   *y1;
+//     float   *x2;             // first coordinate of second end
+//     float   *y2;
+// };
+
 
 struct __align__(8) path_element_t {
     uint32_t pidx;
