@@ -481,7 +481,6 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 
                 double mag = sqrt(dx * dx + dy * dy);
                 double delta = mu * (mag - d_ij) / 2.0;
-                //double delta_abs = std::abs(delta);
 
                 double r = delta / mag;
                 double r_x = r * dx;
@@ -491,10 +490,8 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
                 y1->store(y1->load() - float(r_y));
                 x2->store(x2->load() + float(r_x));
                 y2->store(y2->load() + float(r_y));
-
             }
         }
-
     }
 }
 
@@ -555,7 +552,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
             path_numa_assignments[path_idx] = 0;
             numa0_steps += step_count;
         } else {
-            path_numa_assignments[path_idx] = 1; 
+            path_numa_assignments[path_idx] = 1;
             numa1_steps += step_count;
         }
     }
@@ -584,6 +581,86 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     }
     std::cout << std::endl;
 
+    // Now determine node assignments based on path usage frequency
+    std::cout << "Calculating node NUMA assignments based on usage frequency..." << std::endl;
+    
+    // Create a vector to count how often each node is accessed by paths from each NUMA node
+    std::vector<uint32_t> node_numa0_count(node_count, 0);
+    std::vector<uint32_t> node_numa1_count(node_count, 0);
+    std::vector<int> node_numa_assignments(node_count, -1);
+    
+    // First, we need to allocate path_data for the counting
+    cuda::path_data_t temp_path_data;
+    temp_path_data.path_count = path_count;
+    temp_path_data.total_path_steps = total_path_steps;
+    temp_path_data.paths = (cuda::path_t*) malloc(path_count * sizeof(cuda::path_t));
+    temp_path_data.element_array = (path_element_t*) malloc(total_path_steps * sizeof(path_element_t));
+    
+    // Initialize path data for counting (simplified without NUMA awareness)
+    uint32_t first_step_counter = 0;
+    for (int path_idx = 0; path_idx < path_count; path_idx++) {
+        temp_path_data.paths[path_idx].step_count = path_lengths[path_idx];
+        temp_path_data.paths[path_idx].first_step_in_path = first_step_counter;
+        
+        if (path_lengths[path_idx] == 0) {
+            temp_path_data.paths[path_idx].elements = NULL;
+        } else {
+            path_element_t *cur_path = &temp_path_data.element_array[first_step_counter];
+            temp_path_data.paths[path_idx].elements = cur_path;
+            
+            odgi::path_handle_t p = path_handles[path_idx];
+            odgi::step_handle_t s = graph.path_begin(p);
+            int64_t pos = 1;
+            
+            for (int step_idx = 0; step_idx < path_lengths[path_idx]; step_idx++) {
+                odgi::handle_t h = graph.get_handle_of_step(s);
+                
+                uint32_t node_id = graph.get_id(h) - 1;
+                cur_path[step_idx].node_id = node_id;
+                
+                // Count this node access for the NUMA node the path is assigned to
+                if (path_numa_assignments[path_idx] == 0) {
+                    node_numa0_count[node_id]++;
+                } else {
+                    node_numa1_count[node_id]++;
+                }
+                
+                // Move to next step
+                if (graph.has_next_step(s)) {
+                    s = graph.get_next_step(s);
+                } else if (!(step_idx == path_lengths[path_idx]-1)) {
+                    std::cerr << "Error: Path " << path_idx << " has fewer steps than expected" << std::endl;
+                    break;
+                }
+            }
+        }
+        
+        first_step_counter += path_lengths[path_idx];
+    }
+    
+    // Now assign each node to the NUMA node that uses it more frequently
+    for (uint32_t n = 0; n < node_count; n++) {
+        if (node_numa0_count[n] >= node_numa1_count[n]) {
+            node_numa_assignments[n] = 0;
+        } else {
+            node_numa_assignments[n] = 1;
+        }
+    }
+    
+    // Calculate and print statistics about node assignments
+    uint32_t numa0_nodes = std::count(node_numa_assignments.begin(), node_numa_assignments.end(), 0);
+    uint32_t numa1_nodes = std::count(node_numa_assignments.begin(), node_numa_assignments.end(), 1);
+    
+    std::cout << "Node NUMA assignments:" << std::endl;
+    std::cout << "  NUMA node 0: " << numa0_nodes << " nodes (" 
+              << (double)numa0_nodes / node_count * 100.0 << "%)" << std::endl;
+    std::cout << "  NUMA node 1: " << numa1_nodes << " nodes ("
+              << (double)numa1_nodes / node_count * 100.0 << "%)" << std::endl;
+    
+    // Clean up temporary path data
+    free(temp_path_data.paths);
+    free(temp_path_data.element_array);
+
     // Now allocate memory with NUMA awareness
     // 1. Create eta array (small, not NUMA critical)
     double *etas = (double*) malloc(config.iter_max * sizeof(double));
@@ -611,7 +688,7 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     path_data.paths = (cuda::path_t*) malloc(path_count * sizeof(cuda::path_t));
     
     // Pre-calculate first_step positions (just a counter, no NUMA concerns)
-    uint32_t first_step_counter = 0;
+    first_step_counter = 0;
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
         path_data.paths[path_idx].step_count = path_lengths[path_idx];
         path_data.paths[path_idx].first_step_in_path = first_step_counter;
@@ -623,9 +700,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
 
     // NUMA-aware initialization for both node_data and path_data.element_array
     std::cout << "Performing NUMA-aware initialization..." << std::endl;
-    
-    // For node data: simple split in half
-    uint32_t half_node_count = (node_count + 1) / 2;
     
     // For path data: instead of relying on thread-iteration assignment,
     // we will explicitly handle NUMA assignments
@@ -654,23 +728,23 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         sched_setaffinity(0, sizeof(mask), &mask);
         #endif
         
-        // 1. First-touch node data (simple split)
-        // Each NUMA node handles its own half of the nodes
+        // Initialize nodes based on their NUMA assignment
 #pragma omp for
         for (uint32_t n = 0; n < node_count; n++) {
+            // Only touch nodes that belong to this NUMA node
+            if (node_numa_assignments[n] == numa_node) {
+                // Get handle for this node
+                const handlegraph::handle_t h = graph.get_handle(n + 1, false);
                 
-            // Get handle for this node
-            const handlegraph::handle_t h = graph.get_handle(n + 1, false);
-            
-            // First-touch: initialize node sequence length
-            node_data.nodes[n].seq_length = graph.get_length(h);
-            
-            // First-touch: initialize node coordinates
-            node_data.nodes[n].coords[0].store(float(X[n * 2].load()));
-            node_data.nodes[n].coords[1].store(float(Y[n * 2].load()));
-            node_data.nodes[n].coords[2].store(float(X[n * 2 + 1].load()));
-            node_data.nodes[n].coords[3].store(float(Y[n * 2 + 1].load()));
-            
+                // First-touch: initialize node sequence length
+                node_data.nodes[n].seq_length = graph.get_length(h);
+                
+                // First-touch: initialize node coordinates
+                node_data.nodes[n].coords[0].store(float(X[n * 2].load()));
+                node_data.nodes[n].coords[1].store(float(Y[n * 2].load()));
+                node_data.nodes[n].coords[2].store(float(X[n * 2 + 1].load()));
+                node_data.nodes[n].coords[3].store(float(Y[n * 2 + 1].load()));
+            }
         }
     }
     
