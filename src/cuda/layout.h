@@ -78,7 +78,12 @@ struct layout_config_t {
     int nthreads;
 };
 
+void cpu_layout(layout_config_t config, double *etas, double *zetas, node_data_t &node_data, path_data_t &path_data, const std::vector<int> &path_numa_assignments = std::vector<int>());
 
 void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<std::atomic<double>> &X, std::vector<std::atomic<double>> &Y);
+
+// Path analysis functions for NUMA optimization
+void analyze_paths(const node_data_t &node_data, const path_data_t &path_data, const std::string &output_file = "");
+std::vector<int> partition_paths_for_numa(const path_data_t &path_data, int numa_count = 2);
 
 }

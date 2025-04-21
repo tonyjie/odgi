@@ -1,7 +1,8 @@
 #include "layout.h"
 //#include <cuda.h>
 #include <assert.h>
-
+#include <iomanip>
+#include <sched.h>
 
 namespace cuda {
 
@@ -28,14 +29,23 @@ void analyze_paths(const cuda::node_data_t &node_data, const path_data_t &path_d
         path_stats_t stats;
         stats.path_idx = p;
         stats.step_count = path_data.paths[p].step_count;
-        
+
         // Track unique nodes in this path
         std::set<uint32_t> unique_nodes;
         for (uint32_t s = 0; s < stats.step_count; s++) {
-            uint32_t node_id = path_data.paths[p].elements[s].node_id;
-            unique_nodes.insert(node_id);
+            if (path_data.paths[p].elements != NULL) {
+                uint32_t node_id = path_data.paths[p].elements[s].node_id;
+                unique_nodes.insert(node_id);
+            } else {
+                // raise error
+                std::cerr << "Path " << p << " has no elements" << std::endl;
+                exit(1);
+            }
         }
         
+        // add some check print
+        std::cout << "Path " << p << " has " << stats.step_count << " steps" << std::endl;
+
         stats.unique_nodes = unique_nodes;
         stats.unique_node_count = unique_nodes.size();
         
@@ -47,6 +57,9 @@ void analyze_paths(const cuda::node_data_t &node_data, const path_data_t &path_d
         max_steps = std::max(max_steps, (uint64_t)stats.step_count);
     }
     
+    // print if unique nodes are running corredctly
+    std::cout << "Passed unique nodes check" << std::endl;
+
     // Sort paths by step count (descending) for easier partitioning
     std::sort(path_stats.begin(), path_stats.end(), 
               [](const path_stats_t &a, const path_stats_t &b) {
@@ -239,21 +252,105 @@ std::vector<int> partition_paths_for_numa(const path_data_t &path_data, int numa
 
 
 
-void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data) {
+void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda::node_data_t &node_data, cuda::path_data_t &path_data, const std::vector<int> &path_numa_assignments) {
     int nbr_threads = config.nthreads;
     std::cout << "cuda cpu layout (" << nbr_threads << " threads)" << std::endl;
+    
+    bool use_numa_partitioning = !path_numa_assignments.empty() && path_numa_assignments.size() == path_data.path_count;
+    if (use_numa_partitioning) {
+        std::cout << "Using NUMA-aware path partitioning" << std::endl;
+    }
+    
+    // Each NUMA node will need its own paths distribution for random selection
+    std::vector<std::vector<uint64_t>> numa_path_dist;
+    if (use_numa_partitioning) {
+        // Calculate the number of NUMA nodes (max value in assignments + 1)
+        int numa_count = 0;
+        for (int numa : path_numa_assignments) {
+            numa_count = std::max(numa_count, numa + 1);
+        }
+        numa_path_dist.resize(numa_count);
+        
+        // Build path distribution for each NUMA node
+        for (uint32_t p = 0; p < path_data.path_count; p++) {
+            int numa = path_numa_assignments[p];
+            numa_path_dist[numa].push_back(uint64_t(path_data.paths[p].step_count));
+        }
+    }
+
+    // If not using NUMA partitioning, use a single distribution for all threads
     std::vector<uint64_t> path_dist;
-    for (int p = 0; p < path_data.path_count; p++) {
-        path_dist.push_back(uint64_t(path_data.paths[p].step_count));
+    if (!use_numa_partitioning) {
+        for (int p = 0; p < path_data.path_count; p++) {
+            path_dist.push_back(uint64_t(path_data.paths[p].step_count));
+        }
     }
 
 #pragma omp parallel num_threads(nbr_threads)
     {
         int tid = omp_get_thread_num();
+        int numa_node = (use_numa_partitioning && nbr_threads > 1) ? (tid / (nbr_threads / 2)) : 0;
+        
+        // Set thread affinity to the appropriate NUMA node
+        if (use_numa_partitioning) {
+            #ifdef _OPENMP
+            // Bind each thread to cores on its NUMA node
+            cpu_set_t mask;
+            CPU_ZERO(&mask);
+            
+            // For a dual-socket system with 24 cores per socket:
+            // - NUMA node 0: cores 0-23
+            // - NUMA node 1: cores 24-47
+            int core_id;
+            if (numa_node == 0) {
+                // Bind to a core on NUMA node 0 (0-23)
+                core_id = tid % (nbr_threads / 2);
+            } else {
+                // Bind to a core on NUMA node 1 (24-47)
+                core_id = 24 + (tid % (nbr_threads / 2));
+            }
+            
+            CPU_SET(core_id, &mask);
+            
+            // Apply the affinity mask
+            if (sched_setaffinity(0, sizeof(mask), &mask) == -1) {
+                #pragma omp critical
+                {
+                    std::cerr << "Thread " << tid << " failed to set CPU affinity to core " << core_id << " on NUMA node " << numa_node << std::endl;
+                }
+            } else {
+                // Only print a few thread bindings to avoid excessive output
+                bool should_print = (tid < 2) || (tid == nbr_threads/2) || (tid == nbr_threads/2 - 1) || (tid >= nbr_threads - 2);
+                if (should_print) {
+                    #pragma omp critical
+                    {
+                        std::cout << "Thread " << tid << " bound to core " << core_id << " on NUMA node " << numa_node << std::endl;
+                    }
+                }
+            }
+            #endif
+        }
+        
+        // Thread's discrete distribution either based on all paths or just its NUMA node's paths
+        std::discrete_distribution<> rand_path;
+        if (use_numa_partitioning) {
+            // Check if this NUMA node has any paths
+            if (!numa_path_dist[numa_node].empty()) {
+                rand_path = std::discrete_distribution<>(
+                    numa_path_dist[numa_node].begin(), 
+                    numa_path_dist[numa_node].end()
+                );
+            } else {
+                // If no paths for this NUMA node, default to all paths (should not happen)
+                std::cout << "Warning: NUMA node " << numa_node << " has no paths assigned" << std::endl;
+                rand_path = std::discrete_distribution<>(path_dist.begin(), path_dist.end());
+            }
+        } else {
+            rand_path = std::discrete_distribution<>(path_dist.begin(), path_dist.end());
+        }
 
         XoshiroCpp::Xoshiro256Plus gen(9399220 + tid);
         std::uniform_int_distribution<uint64_t> flip(0, 1);
-        std::discrete_distribution<> rand_path(path_dist.begin(), path_dist.end());
 
         const int steps_per_thread = config.min_term_updates / nbr_threads;
 
@@ -262,7 +359,26 @@ void cpu_layout(cuda::layout_config_t config, double *etas, double *zetas, cuda:
 #pragma omp barrier
             for (int step = 0; step < steps_per_thread; step++ ) {
                 // get path
-                uint32_t path_idx = rand_path(gen);
+                uint32_t path_idx; 
+                if (use_numa_partitioning) {
+                    // When using NUMA partitioning, need to map the distribution's output to actual path indices
+                    int local_path_idx = rand_path(gen);
+                    
+                    // Convert local path index to global path index based on NUMA assignments
+                    int count = 0;
+                    for (uint32_t p = 0; p < path_data.path_count; p++) {
+                        if (path_numa_assignments[p] == numa_node) {
+                            if (count == local_path_idx) {
+                                path_idx = p;
+                                break;
+                            }
+                            count++;
+                        }
+                    }
+                } else {
+                    path_idx = rand_path(gen);
+                }
+                
                 path_t p = path_data.paths[path_idx];
                 if (p.step_count < 2) {
                     continue;
@@ -389,7 +505,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     auto start = std::chrono::high_resolution_clock::now();
 #endif
 
-
     std::cout << "Hello world from CUDA host" << std::endl;
     std::cout << "iter_max: " << config.iter_max << std::endl;
     std::cout << "first_cooling_iteration: " << config.first_cooling_iteration << std::endl;
@@ -397,11 +512,81 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "size of node_t: " << sizeof(node_t) << std::endl;
     std::cout << "theta: " << config.theta << std::endl;
 
-    // create eta array
-    double *etas;
-    //cudaMallocManaged(&etas, config.iter_max * sizeof(double));
-    etas = (double*) malloc(config.iter_max * sizeof(double));
+    // First count how many paths and steps we have
+    uint32_t node_count = graph.get_node_count();
+    std::cout << "node_count: " << node_count << std::endl;
+    assert(graph.min_node_id() == 1);
+    assert(graph.max_node_id() == node_count);
+    assert(graph.max_node_id() - graph.min_node_id() + 1 == node_count);
 
+    uint32_t path_count = graph.get_path_count();
+    std::cout << "path_count: " << path_count << std::endl;
+    
+    // Count total path steps
+    uint64_t total_path_steps = 0;
+    vector<odgi::path_handle_t> path_handles{};
+    path_handles.reserve(path_count);
+    graph.for_each_path_handle(
+        [&] (const odgi::path_handle_t& p) {
+            path_handles.push_back(p);
+            total_path_steps += graph.get_step_count(p);
+        });
+    std::cout << "total_path_steps: " << total_path_steps << std::endl;
+
+    // Get path lengths first
+    vector<uint32_t> path_lengths(path_count);
+    for (int path_idx = 0; path_idx < path_count; path_idx++) {
+        odgi::path_handle_t p = path_handles[path_idx];
+        path_lengths[path_idx] = graph.get_step_count(p);
+    }
+    
+    // Create initial path assignments based on their sizes
+    std::vector<int> path_numa_assignments(path_count, -1);
+    uint64_t numa0_steps = 0;
+    uint64_t numa1_steps = 0;
+        
+    // Greedily assign paths to NUMA nodes to balance workload
+    // Keep adding paths to NUMA0 until we exceed half of total steps
+    uint64_t half_total_steps = total_path_steps / 2;
+    for (int path_idx = 0; path_idx < path_count; path_idx++) {
+        uint32_t step_count = path_lengths[path_idx];
+        
+        if (numa0_steps < half_total_steps) {
+            path_numa_assignments[path_idx] = 0;
+            numa0_steps += step_count;
+        } else {
+            path_numa_assignments[path_idx] = 1; 
+            numa1_steps += step_count;
+        }
+    }
+    
+    std::cout << "NUMA path assignments:" << std::endl;
+    std::cout << "  NUMA node 0: " << std::count(path_numa_assignments.begin(), path_numa_assignments.end(), 0) 
+              << " paths, " << numa0_steps << " steps (" 
+              << (double)numa0_steps / total_path_steps * 100.0 << "%)" << std::endl;
+    std::cout << "  NUMA node 1: " << std::count(path_numa_assignments.begin(), path_numa_assignments.end(), 1) 
+              << " paths, " << numa1_steps << " steps ("
+              << (double)numa1_steps / total_path_steps * 100.0 << "%)" << std::endl;
+
+    std::cout << "Paths on NUMA node 0: ";
+    for (int i = 0; i < path_count; i++) {
+        if (path_numa_assignments[i] == 0) {
+            std::cout << i << " ";
+        }
+    }
+    std::cout << std::endl;
+
+    std::cout << "Paths on NUMA node 1: ";
+    for (int i = 0; i < path_count; i++) {
+        if (path_numa_assignments[i] == 1) {
+            std::cout << i << " ";
+        }
+    }
+    std::cout << std::endl;
+
+    // Now allocate memory with NUMA awareness
+    // 1. Create eta array (small, not NUMA critical)
+    double *etas = (double*) malloc(config.iter_max * sizeof(double));
     const int32_t iter_max = config.iter_max;
     const int32_t iter_with_max_learning_rate = config.iter_with_max_learning_rate;
     const double w_max = 1.0;
@@ -414,107 +599,218 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         etas[i] = isnan(eta)? eta_min : eta;
     }
 
-
-    // create node data structure
-    // consisting of sequence length and coords
-    uint32_t node_count = graph.get_node_count();
-    std::cout << "node_count: " << node_count << std::endl;
-    assert(graph.min_node_id() == 1);
-    assert(graph.max_node_id() == node_count);
-    assert(graph.max_node_id() - graph.min_node_id() + 1 == node_count);
-
+    // 2. Allocate node and path data structures
+    // We'll initialize these with NUMA awareness
     cuda::node_data_t node_data;
     node_data.node_count = node_count;
-    //cudaMallocManaged(&node_data.nodes, node_count * sizeof(cuda::node_t));
     node_data.nodes = (cuda::node_t*) malloc(node_count * sizeof(cuda::node_t));
-    for (int node_idx = 0; node_idx < node_count; node_idx++) {
-        //assert(graph.has_node(node_idx));
-        cuda::node_t *n_tmp = &node_data.nodes[node_idx];
-
-        // sequence length
-        const handlegraph::handle_t h = graph.get_handle(node_idx + 1, false);
-        // NOTE: unable store orientation (reverse), since this information is path dependent
-        n_tmp->seq_length = graph.get_length(h);
-
-        // copy random coordinates
-        n_tmp->coords[0].store(float(X[node_idx * 2].load()));
-        n_tmp->coords[1].store(float(Y[node_idx * 2].load()));
-        n_tmp->coords[2].store(float(X[node_idx * 2 + 1].load()));
-        n_tmp->coords[3].store(float(Y[node_idx * 2 + 1].load()));
-    }
-
-
-    // create path data structure
-    uint32_t path_count = graph.get_path_count();
+    
     cuda::path_data_t path_data;
     path_data.path_count = path_count;
-    path_data.total_path_steps = 0;
-    //cudaMallocManaged(&path_data.paths, path_count * sizeof(cuda::path_t));
+    path_data.total_path_steps = total_path_steps;
     path_data.paths = (cuda::path_t*) malloc(path_count * sizeof(cuda::path_t));
-
-    vector<odgi::path_handle_t> path_handles{};
-    path_handles.reserve(path_count);
-    graph.for_each_path_handle(
-        [&] (const odgi::path_handle_t& p) {
-            path_handles.push_back(p);
-            path_data.total_path_steps += graph.get_step_count(p);
-        });
-    //cudaMallocManaged(&path_data.element_array, path_data.total_path_steps * sizeof(path_element_t));
-    path_data.element_array = (path_element_t*) malloc(path_data.total_path_steps * sizeof(path_element_t));
-
-    // get length and starting position of all paths
+    
+    // Pre-calculate first_step positions (just a counter, no NUMA concerns)
     uint32_t first_step_counter = 0;
     for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        odgi::path_handle_t p = path_handles[path_idx];
-        int step_count = graph.get_step_count(p);
-        path_data.paths[path_idx].step_count = step_count;
+        path_data.paths[path_idx].step_count = path_lengths[path_idx];
         path_data.paths[path_idx].first_step_in_path = first_step_counter;
-        first_step_counter += step_count;
+        first_step_counter += path_lengths[path_idx];
     }
+    
+    // Allocate element array - will be touched with NUMA awareness
+    path_data.element_array = (path_element_t*) malloc(total_path_steps * sizeof(path_element_t));
 
-#pragma omp parallel for num_threads(config.nthreads)
-    for (int path_idx = 0; path_idx < path_count; path_idx++) {
-        odgi::path_handle_t p = path_handles[path_idx];
-        //std::cout << graph.get_path_name(p) << ": " << graph.get_step_count(p) << std::endl;
-
-        uint32_t step_count = path_data.paths[path_idx].step_count;
-        uint32_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
-        if (step_count == 0) {
-            path_data.paths[path_idx].elements = NULL;
+    // NUMA-aware initialization for both node_data and path_data.element_array
+    std::cout << "Performing NUMA-aware initialization..." << std::endl;
+    
+    // For node data: simple split in half
+    uint32_t half_node_count = (node_count + 1) / 2;
+    
+    // For path data: instead of relying on thread-iteration assignment,
+    // we will explicitly handle NUMA assignments
+    
+    // First initialize all nodes with appropriate NUMA awareness
+#pragma omp parallel num_threads(config.nthreads)
+    {
+        int tid = omp_get_thread_num();
+        int numa_node = (tid < config.nthreads / 2) ? 0 : 1;
+        
+        // Bind thread to the right NUMA node
+        #ifdef _OPENMP
+        cpu_set_t mask;
+        CPU_ZERO(&mask);
+        
+        int core_id;
+        if (numa_node == 0) {
+            // Bind to a core on NUMA node 0 (0-23)
+            core_id = tid;
         } else {
-            path_element_t *cur_path = &path_data.element_array[first_step_in_path];
-            path_data.paths[path_idx].elements = cur_path;
-
-            odgi::step_handle_t s = graph.path_begin(p);
-            int64_t pos = 1;
-            // Iterate through path
-            for (int step_idx = 0; step_idx < step_count; step_idx++) {
-                odgi::handle_t h = graph.get_handle_of_step(s);
-                //std::cout << graph.get_id(h) << std::endl;
-
-                cur_path[step_idx].node_id = graph.get_id(h) - 1;
-                cur_path[step_idx].pidx = uint32_t(path_idx);
-                // store position negative when handle reverse
-                if (graph.get_is_reverse(h)) {
-                    cur_path[step_idx].pos = -pos;
+            // Bind to a core on NUMA node 1 (24-47)
+            core_id = 24 + (tid - config.nthreads/2);
+        }
+        
+        CPU_SET(core_id, &mask);
+        sched_setaffinity(0, sizeof(mask), &mask);
+        #endif
+        
+        // 1. First-touch node data (simple split)
+        // Each NUMA node handles its own half of the nodes
+#pragma omp for
+        for (uint32_t n = 0; n < node_count; n++) {
+                
+            // Get handle for this node
+            const handlegraph::handle_t h = graph.get_handle(n + 1, false);
+            
+            // First-touch: initialize node sequence length
+            node_data.nodes[n].seq_length = graph.get_length(h);
+            
+            // First-touch: initialize node coordinates
+            node_data.nodes[n].coords[0].store(float(X[n * 2].load()));
+            node_data.nodes[n].coords[1].store(float(Y[n * 2].load()));
+            node_data.nodes[n].coords[2].store(float(X[n * 2 + 1].load()));
+            node_data.nodes[n].coords[3].store(float(Y[n * 2 + 1].load()));
+            
+        }
+    }
+    
+    // 2. Now handle path initialization with explicit NUMA management
+    // We'll use two separate parallel sections, one for each NUMA node
+    
+    // First initialize NUMA node 0 paths
+#pragma omp parallel num_threads(config.nthreads/2)
+    {
+        int tid = omp_get_thread_num();
+        int numa_node = 0;
+        
+        // Bind thread to NUMA node 0
+        #ifdef _OPENMP
+        cpu_set_t mask;
+        CPU_ZERO(&mask);
+        int core_id = tid;
+        CPU_SET(core_id, &mask);
+        sched_setaffinity(0, sizeof(mask), &mask);
+        #endif
+        
+        // Initialize paths assigned to NUMA node 0
+#pragma omp for
+        for (int path_idx = 0; path_idx < path_count; path_idx++) {
+            if (path_numa_assignments[path_idx] == 0) {
+                // First-touch path metadata on NUMA 0
+                volatile uint32_t step_count = path_data.paths[path_idx].step_count;
+                volatile uint64_t first_step = path_data.paths[path_idx].first_step_in_path;
+                
+                odgi::path_handle_t p = path_handles[path_idx];
+                step_count = path_data.paths[path_idx].step_count;
+                uint32_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
+                
+                if (step_count == 0) {
+                    path_data.paths[path_idx].elements = NULL;
+                    std::cout << "Path " << path_idx << " has 0 steps" << std::endl;
                 } else {
-                    cur_path[step_idx].pos = pos;
-                }
-                pos += graph.get_length(h);
-
-                // get next step
-                if (graph.has_next_step(s)) {
-                    s = graph.get_next_step(s);
-                } else if (!(step_idx == step_count-1)) {
-                    // should never be reached
-                    std::cout << "Error: Here should be another step" << std::endl;
+                    path_element_t *cur_path = &path_data.element_array[first_step_in_path];
+                    path_data.paths[path_idx].elements = cur_path;
+                    
+                    odgi::step_handle_t s = graph.path_begin(p);
+                    int64_t pos = 1;
+                    
+                    // Initialize all elements in this path
+                    for (int step_idx = 0; step_idx < step_count; step_idx++) {
+                        odgi::handle_t h = graph.get_handle_of_step(s);
+                        
+                        cur_path[step_idx].node_id = graph.get_id(h) - 1;
+                        cur_path[step_idx].pidx = uint32_t(path_idx);
+                        
+                        // Store position negative when handle reverse
+                        if (graph.get_is_reverse(h)) {
+                            cur_path[step_idx].pos = -pos;
+                        } else {
+                            cur_path[step_idx].pos = pos;
+                        }
+                        pos += graph.get_length(h);
+                        
+                        // Get next step
+                        if (graph.has_next_step(s)) {
+                            s = graph.get_next_step(s);
+                        } else if (!(step_idx == step_count-1)) {
+                            // Should never be reached
+                            std::cout << "Error: Here should be another step" << std::endl;
+                        }
+                    }
                 }
             }
         }
     }
+    
+    // Now initialize NUMA node 1 paths
+#pragma omp parallel num_threads(config.nthreads/2)
+    {
+        int tid = omp_get_thread_num();
+        int numa_node = 1;
+        
+        // Bind thread to NUMA node 1
+        #ifdef _OPENMP
+        cpu_set_t mask;
+        CPU_ZERO(&mask);
+        int core_id = 24 + tid; // Cores 24+ for NUMA node 1
+        CPU_SET(core_id, &mask);
+        sched_setaffinity(0, sizeof(mask), &mask);
+        #endif
+        
+        // Initialize paths assigned to NUMA node 1
+#pragma omp for
+        for (int path_idx = 0; path_idx < path_count; path_idx++) {
+            if (path_numa_assignments[path_idx] == 1) {
+                // First-touch path metadata on NUMA 1
+                volatile uint32_t step_count = path_data.paths[path_idx].step_count;
+                volatile uint64_t first_step = path_data.paths[path_idx].first_step_in_path;
+                
+                
+                odgi::path_handle_t p = path_handles[path_idx];
+                step_count = path_data.paths[path_idx].step_count;
+                uint32_t first_step_in_path = path_data.paths[path_idx].first_step_in_path;
+                
+                if (step_count == 0) {
+                    path_data.paths[path_idx].elements = NULL;
+                    std::cout << "Path " << path_idx << " has 0 steps" << std::endl;
+                } else {
+                    path_element_t *cur_path = &path_data.element_array[first_step_in_path];
+                    path_data.paths[path_idx].elements = cur_path;
+                    
+                    odgi::step_handle_t s = graph.path_begin(p);
+                    int64_t pos = 1;
+                    
+                    // Initialize all elements in this path
+                    for (int step_idx = 0; step_idx < step_count; step_idx++) {
+                        odgi::handle_t h = graph.get_handle_of_step(s);
+                        
+                        cur_path[step_idx].node_id = graph.get_id(h) - 1;
+                        cur_path[step_idx].pidx = uint32_t(path_idx);
+                        
+                        // Store position negative when handle reverse
+                        if (graph.get_is_reverse(h)) {
+                            cur_path[step_idx].pos = -pos;
+                        } else {
+                            cur_path[step_idx].pos = pos;
+                        }
+                        pos += graph.get_length(h);
+                        
+                        // Get next step
+                        if (graph.has_next_step(s)) {
+                            s = graph.get_next_step(s);
+                        } else if (!(step_idx == step_count-1)) {
+                            // Should never be reached
+                            std::cout << "Error: Here should be another step" << std::endl;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    std::cout << "NUMA-aware initialization complete." << std::endl;
 
-
-    // cache zipf zetas
+    // cache zipf zetas (small, not NUMA critical)
     auto start_zeta = std::chrono::high_resolution_clock::now();
     double *zetas;
     uint64_t zetas_cnt = ((config.space <= config.space_max)? config.space : (config.space_max + (config.space - config.space_max) / config.space_quantization_step + 1)) + 1;
@@ -523,7 +819,6 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     std::cout << "config.space: " << config.space << std::endl;
     std::cout << "config.space_quantization: " << config.space_quantization_step << std::endl;
 
-    //cudaMallocManaged(&zetas, zetas_cnt * sizeof(double));
     zetas = (double*) malloc(zetas_cnt * sizeof(double));
     double zeta_tmp = 0.0;
     for (uint64_t i = 1; i < config.space + 1; i++) {
@@ -539,22 +834,18 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
     uint32_t duration_zeta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_zeta - start_zeta).count();
     std::cout << "Zeta precompute took " << duration_zeta_ms << "ms" << std::endl;
 
-
     auto start_compute = std::chrono::high_resolution_clock::now();
 
-    // Analyze path distribution for NUMA optimization
-    // std::cout << "\nAnalyzing path distribution for NUMA optimization..." << std::endl;
+    // Now analyze the paths to get detailed node distribution info
     // analyze_paths(node_data, path_data, "path_analysis.csv");
-    // std::vector<int> path_numa_assignments = partition_paths_for_numa(path_data, 2);
-    // std::cout << "Path analysis complete.\n" << std::endl;
+    // std::cout << "Detailed path analysis complete.\n" << std::endl;
 
-    // CPU Layout
-    cpu_layout(config, etas, zetas, node_data, path_data);
+    // CPU Layout with NUMA-aware path assignments
+    cpu_layout(config, etas, zetas, node_data, path_data, path_numa_assignments);
 
     auto end_compute = std::chrono::high_resolution_clock::now();
     uint32_t duration_compute_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count();
     std::cout << "CPU cache-optimized layout compute took " << duration_compute_ms << "ms" << std::endl;
-
 
     // copy coords back to X, Y vectors
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
@@ -574,14 +865,12 @@ void cuda_layout(layout_config_t config, const odgi::graph_t &graph, std::vector
         //std::cout << "coords of " << node_idx << ": [" << X[node_idx*2] << "; " << Y[node_idx*2] << "] ; [" << X[node_idx*2+1] << "; " << Y[node_idx*2+1] <<"]\n";
     }
 
-
     // get rid of CUDA data structures
     free(etas);
     free(node_data.nodes);
     free(path_data.paths);
     free(path_data.element_array);
     free(zetas);
-
 
 #ifdef cuda_layout_profiling
     auto end = std::chrono::high_resolution_clock::now();
