@@ -435,12 +435,14 @@ void gpu_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<
     CUDACHECK(cudaDeviceSynchronize());
     cudaFree(rnd_state_tmp);
 
+    // Launch all kernels without per-iteration synchronization
+    // SGD is stochastic by nature, so relaxed synchronization is acceptable
     for (int iter = 0; iter < config.iter_max; iter++) {
         gpu_layout_kernel<<<block_nbr, block_size>>>(iter, config, rnd_state, float(etas[iter]), zetas, node_data, path_data, sm_count);
-        // check error
-        CUDACHECK(cudaGetLastError());
-        CUDACHECK(cudaDeviceSynchronize());
     }
+    // Single synchronization at the end
+    CUDACHECK(cudaGetLastError());
+    CUDACHECK(cudaDeviceSynchronize());
 
     // copy coords back to X, Y vectors
     for (int node_idx = 0; node_idx < node_count; node_idx++) {
