@@ -14,3 +14,7 @@ Testing/
 .vscode/
 .cmake/
 cmake-build-debug/
+
+# Experiments and agent prompts
+experiments/
+prompts/
