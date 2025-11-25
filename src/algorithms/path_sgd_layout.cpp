@@ -182,6 +182,13 @@ namespace odgi {
                             // everyone tries to seed with their own random data
                             const std::uint64_t seed = 9399220 + tid;
                             XoshiroCpp::Xoshiro256Plus gen(seed); // a nice, fast PRNG
+                            
+                            // Precompute constants for Zipfian distribution
+                            double zeta2theta = 0.0;
+                            for (int i = 1; i <= 2; ++i) zeta2theta += dirtyzipf::fast_precise_pow(1.0 / i, theta);
+                            double alpha = 1.0 / (1.0 - theta);
+                            double one_minus_theta = 1.0 - theta;
+
                             // some references to literal bitvectors in the path index hmmm
                             const sdsl::bit_vector &np_bv = path_index.get_np_bv();
                             const sdsl::int_vector<> &nr_iv = path_index.get_nr_iv();
@@ -221,27 +228,51 @@ namespace odgi {
                                         if (s_rank > 0 && flip(gen) || s_rank == path_step_count-1) {
                                             // go backward
                                             uint64_t jump_space = std::min(space, (uint64_t) s_rank);
-                                            uint64_t space = jump_space;
+                                            uint64_t space_idx = jump_space;
                                             if (jump_space > space_max){
-                                                space = space_max + (jump_space - space_max) / space_quantization_step + 1;
+                                                space_idx = space_max + (jump_space - space_max) / space_quantization_step + 1;
                                             }
-                                            dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, jump_space, theta, zetas[space]);
-                                            dirtyzipf::dirty_zipfian_int_distribution<uint64_t> z(z_p);
-                                            uint64_t z_i = z(gen);
-                                            //assert(z_i <= path_space);
+                                            
+                                            // INLINE ZIPFIAN DISTRIBUTION
+                                            double zeta_val = zetas[space_idx];
+                                            double eta_z = (1.0 - dirtyzipf::fast_precise_pow(2.0 / (double)jump_space, one_minus_theta)) / 
+                                                         (1.0 - zeta2theta / zeta_val);
+                                            double u = XoshiroCpp::DoubleFromBits(gen());
+                                            double uz = u * zeta_val;
+                                            uint64_t z_i;
+                                            if (uz < 1.0) {
+                                                z_i = 1;
+                                            } else if (uz < zeta2theta) {
+                                                z_i = 2;
+                                            } else {
+                                                z_i = 1 + (uint64_t)((double)jump_space * dirtyzipf::fast_precise_pow(eta_z * u - eta_z + 1.0, alpha));
+                                            }
+
                                             as_integers(step_b)[0] = as_integer(path);
                                             as_integers(step_b)[1] = s_rank - z_i;
                                         } else {
                                             // go forward
                                             uint64_t jump_space = std::min(space, (uint64_t) (path_step_count - s_rank - 1));
-                                            uint64_t space = jump_space;
+                                            uint64_t space_idx = jump_space;
                                             if (jump_space > space_max){
-                                                space = space_max + (jump_space - space_max) / space_quantization_step + 1;
+                                                space_idx = space_max + (jump_space - space_max) / space_quantization_step + 1;
                                             }
-                                            dirtyzipf::dirty_zipfian_int_distribution<uint64_t>::param_type z_p(1, jump_space, theta, zetas[space]);
-                                            dirtyzipf::dirty_zipfian_int_distribution<uint64_t> z(z_p);
-                                            uint64_t z_i = z(gen);
-                                            //assert(z_i <= path_space);
+                                            
+                                            // INLINE ZIPFIAN DISTRIBUTION
+                                            double zeta_val = zetas[space_idx];
+                                            double eta_z = (1.0 - dirtyzipf::fast_precise_pow(2.0 / (double)jump_space, one_minus_theta)) / 
+                                                         (1.0 - zeta2theta / zeta_val);
+                                            double u = XoshiroCpp::DoubleFromBits(gen());
+                                            double uz = u * zeta_val;
+                                            uint64_t z_i;
+                                            if (uz < 1.0) {
+                                                z_i = 1;
+                                            } else if (uz < zeta2theta) {
+                                                z_i = 2;
+                                            } else {
+                                                z_i = 1 + (uint64_t)((double)jump_space * dirtyzipf::fast_precise_pow(eta_z * u - eta_z + 1.0, alpha));
+                                            }
+
                                             as_integers(step_b)[0] = as_integer(path);
                                             as_integers(step_b)[1] = s_rank + z_i;
                                         }
