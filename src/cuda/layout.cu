@@ -141,54 +141,53 @@ static __device__ __inline__ uint32_t __mysmid(){
 __device__
 void update_pos_gpu(int64_t &n1_pos_in_path, uint32_t &n1_id, int &n1_offset,
                     int64_t &n2_pos_in_path, uint32_t &n2_id, int &n2_offset,
-                    double eta, 
+                    float eta, 
                     cuda::node_data_t &node_data) {
-    double term_dist = std::abs(static_cast<double>(n1_pos_in_path) - static_cast<double>(n2_pos_in_path));
+    // Use float throughout for better GPU performance
+    float term_dist = fabsf(float(n1_pos_in_path) - float(n2_pos_in_path));
 
-    if (term_dist < 1e-9) {
-        term_dist = 1e-9;
+    if (term_dist < 1e-9f) {
+        term_dist = 1e-9f;
     }
 
-    double w_ij = 1.0 / term_dist;
+    float w_ij = 1.0f / term_dist;
 
-    double mu = eta * w_ij;
-    if (mu > 1.0) {
-        mu = 1.0;
+    float mu = eta * w_ij;
+    if (mu > 1.0f) {
+        mu = 1.0f;
     }
 
     float *x1 = &node_data.nodes[n1_id].coords[n1_offset];
     float *x2 = &node_data.nodes[n2_id].coords[n2_offset];
     float *y1 = &node_data.nodes[n1_id].coords[n1_offset + 1];
     float *y2 = &node_data.nodes[n2_id].coords[n2_offset + 1];
-    double x1_val = double(*x1);
-    double x2_val = double(*x2);
-    double y1_val = double(*y1);
-    double y2_val = double(*y2);
+    float x1_val = *x1;
+    float x2_val = *x2;
+    float y1_val = *y1;
+    float y2_val = *y2;
 
-    double dx = x1_val - x2_val;
-    double dy = y1_val - y2_val;
+    float dx = x1_val - x2_val;
+    float dy = y1_val - y2_val;
 
-    if (dx == 0.0) {
-        dx = 1e-9;
+    if (dx == 0.0f) {
+        dx = 1e-9f;
     }
 
-    double mag = sqrt(dx * dx + dy * dy);
-    double delta = mu * (mag - term_dist) / 2.0;
-    //double delta_abs = std::abs(delta);
+    float mag = __fsqrt_rn(dx * dx + dy * dy);
+    float delta = mu * (mag - term_dist) * 0.5f;
 
-    // TODO implement delta max stop functionality
-    double r = delta / mag;
-    double r_x = r * dx;
-    double r_y = r * dy;
-    // TODO check current value before updating
-    atomicExch(x1, float(x1_val - r_x));
-    atomicExch(x2, float(x2_val + r_x));
-    atomicExch(y1, float(y1_val - r_y));
-    atomicExch(y2, float(y2_val + r_y)); 
+    // Use direct writes instead of atomicExch for better performance
+    float r = delta / mag;
+    float r_x = r * dx;
+    float r_y = r * dy;
+    *x1 = x1_val - r_x;
+    *x2 = x2_val + r_x;
+    *y1 = y1_val - r_y;
+    *y2 = y2_val + r_y;
 }
 
 __global__ 
-void gpu_layout_kernel(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, double eta, double *zetas, 
+void gpu_layout_kernel(int iter, cuda::layout_config_t config, curandStateCoalesced_t *rnd_state, float eta, double *zetas, 
                                    cuda::node_data_t node_data, cuda::path_data_t path_data, int sm_count) {
     uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t smid = __mysmid();
@@ -437,7 +436,7 @@ void gpu_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<
     cudaFree(rnd_state_tmp);
 
     for (int iter = 0; iter < config.iter_max; iter++) {
-        gpu_layout_kernel<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
+        gpu_layout_kernel<<<block_nbr, block_size>>>(iter, config, rnd_state, float(etas[iter]), zetas, node_data, path_data, sm_count);
         // check error
         CUDACHECK(cudaGetLastError());
         CUDACHECK(cudaDeviceSynchronize());
