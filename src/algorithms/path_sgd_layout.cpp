@@ -191,17 +191,16 @@ namespace odgi {
 
                             // some references to literal bitvectors in the path index hmmm
                             const sdsl::bit_vector &np_bv = path_index.get_np_bv();
+                            const uint64_t np_bv_size = np_bv.size();
                             const sdsl::int_vector<> &nr_iv = path_index.get_nr_iv();
                             const sdsl::int_vector<> &npi_iv = path_index.get_npi_iv();
                             // we'll sample from all path steps
-                            std::uniform_int_distribution<uint64_t> dis_step = std::uniform_int_distribution<uint64_t>(0, np_bv.size() - 1);
-                            std::uniform_int_distribution<uint64_t> flip(0, 1);
                             uint64_t term_updates_local = 0;
                             while (work_todo.load(std::memory_order_relaxed)) {
                                 if (!snapshot_in_progress.load(std::memory_order_relaxed)) {
                                     // sample the first node from all the nodes in the graph
                                     // pick a random position from all paths
-                                    uint64_t step_index = dis_step(gen);
+                                    uint64_t step_index = (uint64_t)(((__uint128_t)gen() * (__uint128_t)np_bv_size) >> 64);
 #ifdef debug_sample_from_nodes
                                     std::cerr << "step_index: " << step_index << std::endl;
 #endif
@@ -223,9 +222,15 @@ namespace odgi {
 #ifdef debug_sample_from_nodes
                                     std::cerr << "step rank in path: " << nr_iv[step_index]  << std::endl;
 #endif
+                                    
+                                    uint64_t rnd_bits = gen();
+                                    bool flip1 = rnd_bits & 1;
+                                    bool flip2 = rnd_bits & 2;
+                                    bool flip3 = rnd_bits & 4;
+                                    bool flip4 = rnd_bits & 8;
 
-                                    if (cooling.load(std::memory_order_relaxed) || flip(gen)) {
-                                        if (s_rank > 0 && flip(gen) || s_rank == path_step_count-1) {
+                                    if (cooling.load(std::memory_order_relaxed) || flip1) {
+                                        if (s_rank > 0 && flip2 || s_rank == path_step_count-1) {
                                             // go backward
                                             uint64_t jump_space = std::min(space, (uint64_t) s_rank);
                                             uint64_t space_idx = jump_space;
@@ -278,9 +283,10 @@ namespace odgi {
                                         }
                                     } else {
                                         // sample randomly across the path
-                                        std::uniform_int_distribution<uint64_t> rando(0, graph.get_step_count(path)-1);
+                                        uint64_t range = graph.get_step_count(path);
+                                        uint64_t r = (uint64_t)(((__uint128_t)gen() * (__uint128_t)range) >> 64);
                                         as_integers(step_b)[0] = as_integer(path);
-                                        as_integers(step_b)[1] = rando(gen);
+                                        as_integers(step_b)[1] = r;
                                     }
 
 
@@ -296,7 +302,7 @@ namespace odgi {
 
                                     // determine which end we're working with for each node
                                     bool term_i_is_rev = graph.get_is_reverse(term_i);
-                                    bool use_other_end_a = flip(gen); // 1 == +; 0 == -
+                                    bool use_other_end_a = flip3; // 1 == +; 0 == -
                                     if (use_other_end_a) {
                                         pos_in_path_a += term_i_length;
                                         // flip back if we were already reversed
@@ -305,7 +311,7 @@ namespace odgi {
                                         use_other_end_a = term_i_is_rev;
                                     }
                                     bool term_j_is_rev = graph.get_is_reverse(term_j);
-                                    bool use_other_end_b = flip(gen); // 1 == +; 0 == -
+                                    bool use_other_end_b = flip4; // 1 == +; 0 == -
                                     if (use_other_end_b) {
                                         pos_in_path_b += term_j_length;
                                         // flip back if we were already reversed
