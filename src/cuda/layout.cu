@@ -295,9 +295,9 @@ void gpu_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<
     CUDACHECK(cudaGetDeviceProperties(&prop, 0));
     int sm_count = prop.multiProcessorCount;
 
-    // create eta array
-    double *etas;
-    cudaMallocManaged(&etas, config.iter_max * sizeof(double));
+    // create eta array - use float for better GPU performance
+    float *etas;
+    cudaMallocManaged(&etas, config.iter_max * sizeof(float));
 
     const int32_t iter_max = config.iter_max;
     const int32_t iter_with_max_learning_rate = config.iter_with_max_learning_rate;
@@ -308,7 +308,7 @@ void gpu_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<
     const double lambda = log(eta_max / eta_min) / ((double) iter_max - 1);
     for (int32_t i = 0; i < config.iter_max; i++) {
         double eta = eta_max * exp(-lambda * (std::abs(i - iter_with_max_learning_rate)));
-        etas[i] = isnan(eta)? eta_min : eta;
+        etas[i] = float(isnan(eta)? eta_min : eta);
     }
 
     // create node data structure
@@ -438,7 +438,7 @@ void gpu_layout(layout_config_t config, const odgi::graph_t &graph, std::vector<
     // Launch all kernels without per-iteration synchronization
     // SGD is stochastic by nature, so relaxed synchronization is acceptable
     for (int iter = 0; iter < config.iter_max; iter++) {
-        gpu_layout_kernel<<<block_nbr, block_size>>>(iter, config, rnd_state, float(etas[iter]), zetas, node_data, path_data, sm_count);
+        gpu_layout_kernel<<<block_nbr, block_size>>>(iter, config, rnd_state, etas[iter], zetas, node_data, path_data, sm_count);
     }
     // Single synchronization at the end
     CUDACHECK(cudaGetLastError());
